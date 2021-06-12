@@ -1,0 +1,10 @@
+{
+    "require": {
+      "pocketmine/pocketmine-mp": "3.20.0",
+      "pocketmine/raklib": "^0.12.7",
+      "ext-sockets": "*"
+    },
+    "autoload": {
+      "classmap": ["src/"]
+    }
+}
