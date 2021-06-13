@@ -4,9 +4,11 @@
 namespace proxy;
 
 
+use pocketmine\network\mcpe\protocol\DisconnectPacket;
 use pocketmine\network\mcpe\protocol\ProtocolInfo;
 use pocketmine\utils\MainLogger;
 use raklib\protocol\MessageIdentifiers;
+use raklib\protocol\PacketReliability;
 use raklib\protocol\UnconnectedPing;
 use raklib\protocol\UnconnectedPong;
 use raklib\server\UDPServerSocket;
@@ -22,7 +24,6 @@ class ProxyServer
     private int $serverID;
 
     public const MINECRAFT_HEADER = 0xFE;
-    public static int $ENTITY_RUNTIME_COUNT = 0;
 
     public function __construct()
     {
@@ -68,21 +69,28 @@ class ProxyServer
     }
 
     private function getSession(string $buffer, InternetAddress $address): ?ClientSession {
-        if (!isset($this->clientSessions[$address->toString()])) {
-            $pid = ord($buffer[0]);
-            if ($pid == MessageIdentifiers::ID_OPEN_CONNECTION_REQUEST_1) {
-                $this->logger->info("Creating new session for {$address->toString()}...");
+        $pid = ord($buffer[0]);
+        if ($pid == MessageIdentifiers::ID_OPEN_CONNECTION_REQUEST_1) {
+            if (!isset($this->clientSessions[$address->toString()])) {
+                $session = new ClientSession($this, $address);
+                $this->clientSessions[$address->toString()] = $session;
             }
-
-            $session = new ClientSession($this, $address);
-            $this->clientSessions[$address->toString()] = $session;
+            $this->logger->info("Creating new session for {$address->toString()}...");
         }
-
         return $this->clientSessions[$address->toString()] ?? null;
     }
 
     public function deleteSession(ClientSession $session): void {
         if (isset($this->clientSessions[$session->getClientAddress()->toString()])) {
+            /** @var ClientSession $session */
+            $session = $this->clientSessions[$session->getClientAddress()->toString()];
+            // If was connected to a server, disconnect him
+            if ($session->isConnected()) {
+                // TODO: not working... wtf
+                $disconnect = new DisconnectPacket();
+                $disconnect->encode();
+                $session->sendEncapsulatedBuffer($disconnect->getBuffer(), PacketReliability::RELIABLE_ORDERED);
+            }
             $this->getLogger()->info("Player with address {$session->getClientAddress()->toString()} disconnected!");
             unset($this->clientSessions[$session->getClientAddress()->toString()]);
         }

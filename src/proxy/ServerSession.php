@@ -56,9 +56,9 @@ class ServerSession extends NetworkSession
     public function readPacket(): void {
         if ($this->socket->readPacket($buffer, $senderIP, $senderPort)) {
             // Maybe we switched server and we're receiving packets from the old one
-            if ($senderIP != $this->targetAddress->getIp() && $senderPort != $this->targetAddress->getPort()) {
-                return;
-            }
+            // if ($senderIP != $this->targetAddress->getIp() && $senderPort != $this->targetAddress->getPort()) {
+            //    return;
+            // }
 
             $this->lastPacketTime = microtime(true);
 
@@ -191,7 +191,20 @@ class ServerSession extends NetworkSession
     }
 
     public function connect(InternetAddress $targetAddress): void {
+        // clear queues and general data
+        $this->inputSequenceNumbers = [];
+        $this->nackSequenceNumbers = [];
+        $this->outputSequenceNumber = 0;
+        $this->outputReliableIndex = 0;
+        $this->outputOrderingIndexes = [];
+        $this->outputBackupQueue = [];
+        $this->splitID = 0;
+        $this->splits = [];
+
         $this->targetAddress = $targetAddress;
+
+        // clear entities mappings
+        EntityMappings::clear();
 
         $this->lastPacketTime = microtime(true);
         $this->status = self::STATUS_UNCONNECTED;

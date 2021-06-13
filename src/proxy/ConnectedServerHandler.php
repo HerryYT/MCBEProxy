@@ -53,7 +53,7 @@ class ConnectedServerHandler
     public function __construct(ServerSession $session)
     {
         $this->session = $session;
-        $this->proxyEntityID = $session->getConnectedClient()->entityID;
+        $this->proxyEntityID = $session->getConnectedClient()->getProxyRuntimeID();
     }
 
     public function handleMinecraft(EncapsulatedPacket $encapsulated) {
@@ -75,35 +75,8 @@ class ConnectedServerHandler
                         $this->session->sendDataPacket($clientCache);
                         $this->session->getProxy()->getLogger()->info("Login success on server!");
                     } elseif ($playStatus->status === PlayStatusPacket::PLAYER_SPAWN) {
-//                        $dim0 = new ChangeDimensionPacket();
-//                        $dim0->dimension = DimensionIds::OVERWORLD;
-//                        $dim0->position = $this->startGamePacket->playerPosition;
-//
-//                        $dim1 = new ChangeDimensionPacket();
-//                        $dim1->dimension = DimensionIds::NETHER;
-//                        $dim1->position = $this->startGamePacket->playerPosition;
-//
-//                        $playStatus0 = new PlayStatusPacket();
-//                        $playStatus0->status = PlayStatusPacket::PLAYER_SPAWN;
-//
-//                        $this->session->getConnectedClient()->getClientSession()->sendDataPacket($dim0);
-//                        $this->session->getConnectedClient()->getClientSession()->sendDataPacket($playStatus0);
-//                        $this->session->getConnectedClient()->getClientSession()->sendDataPacket($dim1);
-//                        $this->session->getConnectedClient()->getClientSession()->sendDataPacket($playStatus0);
-//
-//                        for ($x = -3; $x < 3; $x++) {
-//                            for ($z = -3; $z < 3; $z++) {
-//                                $levelChunk = LevelChunkPacket::withoutCache($x, $z, 0, "");
-//                                $this->session->getConnectedClient()->getClientSession()->sendDataPacket($levelChunk);
-//                            }
-//                        }
-//
-//                        $this->session->getConnectedClient()->getClientSession()->sendDataPacket($dim1);
-//                        $this->session->getConnectedClient()->getClientSession()->sendDataPacket($playStatus0);
-//                        $this->session->getConnectedClient()->getClientSession()->sendDataPacket($dim0);
-//                        $this->session->getConnectedClient()->getClientSession()->sendDataPacket($playStatus0);
                         $movePlayer = new MovePlayerPacket();
-                        $movePlayer->entityRuntimeId = $this->session->getConnectedClient()->entityID;
+                        $movePlayer->entityRuntimeId = $this->session->getConnectedClient()->getProxyRuntimeID();
                         $movePlayer->position = $this->startGamePacket->playerPosition;
                         $movePlayer->mode = MovePlayerPacket::MODE_TELEPORT;
                         $movePlayer->pitch = 0;
