@@ -166,7 +166,7 @@ class ServerSession extends NetworkSession
         $unconnectedPong = new UnconnectedPong($buffer);
         $unconnectedPong->decode();
 
-        // $this->getConnectedClient()->sendMessage($unconnectedPong->serverName);
+        $this->getConnectedClient()->sendMessage($unconnectedPong->serverName);
 
         $reqOne = new OpenConnectionRequest1();
         $reqOne->mtuSize = ($this->mtuSize -= 30) + 30;
@@ -200,6 +200,8 @@ class ServerSession extends NetworkSession
         $this->outputBackupQueue = [];
         $this->splitID = 0;
         $this->splits = [];
+        
+        $this->connectedServer = null;
 
         $this->targetAddress = $targetAddress;
 

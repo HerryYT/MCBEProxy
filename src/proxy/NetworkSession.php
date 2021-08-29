@@ -34,11 +34,21 @@ abstract class NetworkSession
      */
     public function tick(float $currentTime): void {
         if (count($this->inputSequenceNumbers) > 0) {
+            $sequences = [];
+            foreach ($this->inputSequenceNumbers as $inputSeqNum) {
+                $sequences[] = $inputSeqNum;
+            }
+
             $ack = new ACK();
-            $ack->packets = $this->inputSequenceNumbers;
+            $ack->packets = $sequences;
             $ack->encode();
+
             $this->sendBuffer($ack->getBuffer());
-            $this->inputSequenceNumbers = [];
+            foreach ($sequences as $sentSeq) {
+                if (($key = array_search($sentSeq, $this->inputSequenceNumbers)) !== false) {
+                    unset($this->inputSequenceNumbers[$key]);
+                }
+            }
         }
 
         $this->process($currentTime);
@@ -80,6 +90,10 @@ abstract class NetworkSession
                 unset($this->outputBackupQueue[$seq]);
             }
         }
+
+        // Delete older backups from the queue
+        // $min = min($nack->packets);
+        // foreach ($this->outputBackupQueue as $valu)
     }
 
     private function handleConnectedDatagram(string $buffer): void {
@@ -89,9 +103,11 @@ abstract class NetworkSession
         // Just because yes :)
         if ($datagram->seqNumber == null) return;
 
-        if (in_array($datagram->seqNumber, $this->inputSequenceNumbers)) {
-            return;
-        }
+        // Maybe ack is already sent...
+        // if (in_array($datagram->seqNumber, $this->inputSequenceNumbers)) {
+        //    return;
+        // }
+
         $this->inputSequenceNumbers[] = $datagram->seqNumber;
 
         if (in_array($datagram->seqNumber, $this->nackSequenceNumbers)) {

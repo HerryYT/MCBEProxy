@@ -213,6 +213,7 @@ class ConnectedClientHandler
                         $this->getClientSession()->sendDataPacket($creativeContent);
 
                         $biomeDefinition = new BiomeDefinitionListPacket();
+                        $biomeDefinition->namedtag = file_get_contents('vendor/pocketmine/bedrock-data/biome_definitions.nbt');
                         $this->getClientSession()->sendDataPacket($biomeDefinition);
 
                         $playStatus = new PlayStatusPacket();
@@ -262,13 +263,14 @@ class ConnectedClientHandler
                         array_shift($arguments);
                         switch ($commandName) {
                             case "connect":
-                                if (count($arguments) < 2) {
+                                if (count($arguments) < 1) {
                                     $this->sendMessage("Invalid usage! please use */help");
                                     return;
                                 }
 
                                 $targetIp = $arguments[0];
-                                $targetPort = $arguments[1];
+                                $targetPort = $arguments[1] ?? 19132;
+
                                 // If it's a DNS, convert to IP
                                 if (!filter_var($arguments[0], FILTER_VALIDATE_IP)) {
                                     $foundIP = gethostbyname($targetIp);

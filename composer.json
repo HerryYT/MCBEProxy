@@ -1,7 +1,8 @@
 {
     "require": {
-      "pocketmine/pocketmine-mp": "3.20.0",
+      "pocketmine/pocketmine-mp": "3.22.2",
       "pocketmine/raklib": "^0.12.7",
+      "pocketmine/bedrock-data": "dev-master",
       "ext-sockets": "*"
     },
     "autoload": {
