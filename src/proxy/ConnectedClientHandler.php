@@ -302,7 +302,7 @@ class ConnectedClientHandler
                         // Sadly we have to handle that shit here
                         if (($session = $this->getServerSession()) != null) {
                             if ($session->isConnected()) {
-                                $this->getServerSession()->sendDataPacket($textPacket);
+                                $session->sendDataPacket($textPacket);
                             }
                         }
                     }

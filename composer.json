@@ -1,6 +1,6 @@
 {
     "require": {
-      "pocketmine/pocketmine-mp": "3.22.2",
+      "pocketmine/pocketmine-mp": "3.23.1",
       "pocketmine/raklib": "^0.12.7",
       "pocketmine/bedrock-data": "dev-master",
       "ext-sockets": "*"

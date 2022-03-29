@@ -42,6 +42,7 @@ class ServerSession extends NetworkSession
 
     public function __construct(ProxyServer $server, ConnectedClientHandler $connectedClient)
     {
+        parent::__construct();
         $this->proxyServer = $server;
         $this->connectedClient = $connectedClient;
 
@@ -73,11 +74,14 @@ class ServerSession extends NetworkSession
             $this->tryUnconnectedPing();
         } elseif ($this->status === self::STATUS_CONNECTED) {
             // FIXME: send just after some time, don't spam
-            $this->sendConnectedPing();
+            if ($currentTime % 20 == 0) {
+                $this->sendConnectedPing();
+                var_dump(1);
+            }
         }
 
         // Timeout ping
-        if ($currentTime - $this->lastPacketTime >= 5) {
+        if ($currentTime - $this->lastPacketTime >= 10) {
             $this->getConnectedClient()->cancelConnection();
         }
     }
@@ -89,6 +93,7 @@ class ServerSession extends NetworkSession
             return true;
         } elseif ($pid == MessageIdentifiers::ID_OPEN_CONNECTION_REPLY_2) {
             $this->handleOpenConnectionReplyTwo($buffer);
+            var_dump(11);
             return true;
         }
         return false;
@@ -118,7 +123,9 @@ class ServerSession extends NetworkSession
                 $this->status = self::STATUS_CONNECTED;
                 break;
             case ProxyServer::MINECRAFT_HEADER:
-                $this->connectedServer->handleMinecraft($packet);
+                if (isset($this->connectedServer)) {
+                    $this->connectedServer->handleMinecraft($packet);
+                }
                 break;
         }
     }

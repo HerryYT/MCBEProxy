@@ -25,6 +25,7 @@ class ClientSession extends NetworkSession
 
     public function __construct(ProxyServer $server, InternetAddress $address)
     {
+        parent::__construct();
         $this->clientAddress = $address;
         $this->proxyServer = $server;
     }

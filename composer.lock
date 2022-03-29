@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "c72c959132f439dc90230bfc55a40821",
+    "content-hash": "3839fb497905961055057b78e7643844",
     "packages": [
         {
             "name": "adhocore/json-comment",
@@ -67,12 +67,12 @@
             "source": {
                 "type": "git",
                 "url": "https://github.com/pmmp/BedrockData.git",
-                "reference": "5f11689a104e36f136d562eed9ff5a7feaf760a2"
+                "reference": "19569dd729970e161a24b574b41c06a5e064ab81"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/pmmp/BedrockData/zipball/5f11689a104e36f136d562eed9ff5a7feaf760a2",
-                "reference": "5f11689a104e36f136d562eed9ff5a7feaf760a2",
+                "url": "https://api.github.com/repos/pmmp/BedrockData/zipball/19569dd729970e161a24b574b41c06a5e064ab81",
+                "reference": "19569dd729970e161a24b574b41c06a5e064ab81",
                 "shasum": ""
             },
             "default-branch": true,
@@ -84,9 +84,9 @@
             "description": "Blobs of data generated from Minecraft: Bedrock Edition, used by PocketMine-MP",
             "support": {
                 "issues": "https://github.com/pmmp/BedrockData/issues",
-                "source": "https://github.com/pmmp/BedrockData/tree/master"
+                "source": "https://github.com/pmmp/BedrockData/tree/bedrock-1.17.30"
             },
-            "time": "2021-07-23T20:10:08+00:00"
+            "time": "2021-09-21T20:34:59+00:00"
         },
         {
             "name": "pocketmine/binaryutils",
@@ -392,16 +392,16 @@
         },
         {
             "name": "pocketmine/pocketmine-mp",
-            "version": "3.22.2",
+            "version": "3.23.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/pmmp/PocketMine-MP.git",
-                "reference": "d670bc8bf8de0fb8eacbe5c29c9032cad5fe14b5"
+                "reference": "14fba366364eca9f13a30b955c702edbd8e66267"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/pmmp/PocketMine-MP/zipball/d670bc8bf8de0fb8eacbe5c29c9032cad5fe14b5",
-                "reference": "d670bc8bf8de0fb8eacbe5c29c9032cad5fe14b5",
+                "url": "https://api.github.com/repos/pmmp/PocketMine-MP/zipball/14fba366364eca9f13a30b955c702edbd8e66267",
+                "reference": "14fba366364eca9f13a30b955c702edbd8e66267",
                 "shasum": ""
             },
             "require": {
@@ -438,7 +438,7 @@
                 "pocketmine/spl": "^0.4.0"
             },
             "require-dev": {
-                "phpstan/phpstan": "0.12.92",
+                "phpstan/phpstan": "0.12.98",
                 "phpstan/phpstan-phpunit": "^0.12.6",
                 "phpstan/phpstan-strict-rules": "^0.12.2",
                 "phpunit/phpunit": "^9.2"
@@ -460,11 +460,11 @@
             "license": [
                 "LGPL-3.0"
             ],
-            "description": "A server software for Minecraft: Pocket Edition written in PHP",
+            "description": "A server software for Minecraft: Bedrock Edition written in PHP",
             "homepage": "https://pmmp.io",
             "support": {
                 "issues": "https://github.com/pmmp/PocketMine-MP/issues",
-                "source": "https://github.com/pmmp/PocketMine-MP/tree/3.22.2"
+                "source": "https://github.com/pmmp/PocketMine-MP/tree/3.23.1"
             },
             "funding": [
                 {
@@ -476,7 +476,7 @@
                     "type": "patreon"
                 }
             ],
-            "time": "2021-08-18T13:14:54+00:00"
+            "time": "2021-09-22T00:00:50+00:00"
         },
         {
             "name": "pocketmine/raklib",

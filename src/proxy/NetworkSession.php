@@ -22,10 +22,16 @@ abstract class NetworkSession
     protected int $outputReliableIndex = 0;
     protected array $outputOrderingIndexes = [];
     protected array $outputBackupQueue = [];
+    protected int $outputSequenceIndex = 0;
     protected int $splitID = 0;
     protected array $splits = [];
 
     protected int $mtuSize = self::MAX_MTU_SIZE;
+
+    public function __construct()
+    {
+        $this->outputOrderingIndexes = array_fill(0, 32, 0);
+    }
 
     /**
      * Tick is for RakNet stuff, while process is for session things.
@@ -34,21 +40,12 @@ abstract class NetworkSession
      */
     public function tick(float $currentTime): void {
         if (count($this->inputSequenceNumbers) > 0) {
-            $sequences = [];
-            foreach ($this->inputSequenceNumbers as $inputSeqNum) {
-                $sequences[] = $inputSeqNum;
-            }
-
             $ack = new ACK();
-            $ack->packets = $sequences;
+            $ack->packets = $this->inputSequenceNumbers;
             $ack->encode();
 
             $this->sendBuffer($ack->getBuffer());
-            foreach ($sequences as $sentSeq) {
-                if (($key = array_search($sentSeq, $this->inputSequenceNumbers)) !== false) {
-                    unset($this->inputSequenceNumbers[$key]);
-                }
-            }
+            $this->inputSequenceNumbers = [];
         }
 
         $this->process($currentTime);
@@ -101,12 +98,7 @@ abstract class NetworkSession
         $datagram->decode();
 
         // Just because yes :)
-        if ($datagram->seqNumber == null) return;
-
-        // Maybe ack is already sent...
-        // if (in_array($datagram->seqNumber, $this->inputSequenceNumbers)) {
-        //    return;
-        // }
+        if ($datagram->seqNumber === null) return;
 
         $this->inputSequenceNumbers[] = $datagram->seqNumber;
 
@@ -153,18 +145,20 @@ abstract class NetworkSession
         $encapsulated->reliability = $reliability;
         $encapsulated->buffer = $buffer;
         $encapsulated->orderChannel = 0;   // hack
-        if (PacketReliability::isReliable($reliability)) {
-            $encapsulated->messageIndex = $this->outputReliableIndex++;
-            if (PacketReliability::isOrdered($reliability)) {
-                if (!isset($this->outputOrderingIndexes[$encapsulated->orderChannel])) {
-                    $this->outputOrderingIndexes[$encapsulated->orderChannel] = 0;
-                }
-                $encapsulated->orderIndex = $this->outputOrderingIndexes[$encapsulated->orderChannel]++;
+
+        if (PacketReliability::isOrdered($reliability)) {
+            // TODO: capire il perche'
+            if (!isset($this->outputOrderingIndexes[$encapsulated->orderChannel])) {
+                $this->outputOrderingIndexes[$encapsulated->orderChannel] = 0;
             }
+            $encapsulated->orderIndex = $this->outputOrderingIndexes[$encapsulated->orderChannel]++;
+        } else if (PacketReliability::isSequenced($reliability)) {
+            $encapsulated->orderIndex = $this->outputOrderingIndexes[$encapsulated->orderChannel];
+            $encapsulated->sequenceIndex = $this->outputSequenceIndex++;
         }
 
-        $maxSize = $this->mtuSize - 60;
-        if (strlen($encapsulated->buffer) > $maxSize) {
+        $maxSize = $this->mtuSize - 36;
+        if (strlen($encapsulated->buffer) + 4 > $maxSize) {
             $buffers = str_split($encapsulated->buffer, $maxSize);
             assert($buffers !== false);
             $bufferCount = count($buffers);
@@ -179,18 +173,22 @@ abstract class NetworkSession
                 $pk->splitIndex = $count;
                 $pk->buffer = $buffer;
 
-                if(PacketReliability::isReliable($pk->reliability)){
+                if (PacketReliability::isReliable($pk->reliability)) {
                     $pk->messageIndex = $this->outputReliableIndex++;
                 }
 
                 $pk->sequenceIndex = $encapsulated->sequenceIndex;
                 $pk->orderChannel = $encapsulated->orderChannel;
                 $pk->orderIndex = $encapsulated->orderIndex;
+
                 $this->sendEncapsulated($pk);
             }
-            return;
+        } else {
+            if(PacketReliability::isReliable($encapsulated->reliability)){
+                $encapsulated->messageIndex = $this->outputReliableIndex++;
+            }
+            $this->sendEncapsulated($encapsulated);
         }
-        $this->sendEncapsulated($encapsulated);
     }
 
     private function sendEncapsulated(EncapsulatedPacket $encapsulated): void {
