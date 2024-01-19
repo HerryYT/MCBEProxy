@@ -4,14 +4,16 @@
 namespace proxy;
 
 
+use Firebase\JWT\JWT;
+use Firebase\JWT\Key;
 use pocketmine\network\mcpe\protocol\AddPlayerPacket;
-use pocketmine\network\mcpe\protocol\AdventureSettingsPacket;
+use pocketmine\network\mcpe\protocol\AvailableActorIdentifiersPacket;
 use pocketmine\network\mcpe\protocol\AvailableCommandsPacket;
-use pocketmine\network\mcpe\protocol\BatchPacket;
 use pocketmine\network\mcpe\protocol\ChunkRadiusUpdatedPacket;
 use pocketmine\network\mcpe\protocol\ClientCacheStatusPacket;
 use pocketmine\network\mcpe\protocol\CraftingDataPacket;
 use pocketmine\network\mcpe\protocol\CreativeContentPacket;
+use pocketmine\network\mcpe\protocol\DataPacket;
 use pocketmine\network\mcpe\protocol\InventoryContentPacket;
 use pocketmine\network\mcpe\protocol\InventorySlotPacket;
 use pocketmine\network\mcpe\protocol\LevelChunkPacket;
@@ -22,6 +24,7 @@ use pocketmine\network\mcpe\protocol\MobEquipmentPacket;
 use pocketmine\network\mcpe\protocol\ModalFormRequestPacket;
 use pocketmine\network\mcpe\protocol\MovePlayerPacket;
 use pocketmine\network\mcpe\protocol\NetworkChunkPublisherUpdatePacket;
+use pocketmine\network\mcpe\protocol\NetworkSettingsPacket;
 use pocketmine\network\mcpe\protocol\PacketPool;
 use pocketmine\network\mcpe\protocol\PlayerListPacket;
 use pocketmine\network\mcpe\protocol\PlayStatusPacket;
@@ -29,7 +32,12 @@ use pocketmine\network\mcpe\protocol\ProtocolInfo;
 use pocketmine\network\mcpe\protocol\RemoveObjectivePacket;
 use pocketmine\network\mcpe\protocol\ResourcePackClientResponsePacket;
 use pocketmine\network\mcpe\protocol\ResourcePacksInfoPacket;
+use pocketmine\network\mcpe\protocol\serializer\ItemTypeDictionary;
+use pocketmine\network\mcpe\protocol\serializer\PacketBatch;
+use pocketmine\network\mcpe\protocol\serializer\PacketSerializerContext;
+use pocketmine\network\mcpe\protocol\ServerToClientHandshakePacket;
 use pocketmine\network\mcpe\protocol\SetActorDataPacket;
+use pocketmine\network\mcpe\protocol\SetActorMotionPacket;
 use pocketmine\network\mcpe\protocol\SetDisplayObjectivePacket;
 use pocketmine\network\mcpe\protocol\SetLocalPlayerAsInitializedPacket;
 use pocketmine\network\mcpe\protocol\SetScorePacket;
@@ -40,15 +48,17 @@ use pocketmine\network\mcpe\protocol\TextPacket;
 use pocketmine\network\mcpe\protocol\TickSyncPacket;
 use pocketmine\network\mcpe\protocol\UpdateAttributesPacket;
 use pocketmine\network\mcpe\protocol\UpdateBlockPacket;
+use pocketmine\utils\BinaryStream;
 use raklib\protocol\EncapsulatedPacket;
 
 class ConnectedServerHandler
 {
     private ServerSession $session;
     public ?StartGamePacket $startGamePacket = null;
+    private bool $isLoggedIn = false;
 
     private int $proxyEntityID;
-    public array $nearbyPlayers = [];
+    // public array $nearbyPlayers = [];
 
     public function __construct(ServerSession $session)
     {
@@ -57,26 +67,35 @@ class ConnectedServerHandler
     }
 
     public function handleMinecraft(EncapsulatedPacket $encapsulated) {
-        $batch = new BatchPacket($encapsulated->buffer);
-        $batch->decode();
-        $batch->getPackets();
-        foreach ($batch->getPackets() as $buffer) {
-            $pid = ord($buffer[0]);
-            // $packet = PacketPool::getPacket($buffer);
-            // var_dump($packet->getName());
-            switch ($pid) {
-                case ProtocolInfo::PLAY_STATUS_PACKET:
-                    $playStatus = new PlayStatusPacket($buffer);
-                    $playStatus->decode();
+        $buffer = substr($encapsulated->buffer, 1);
+        if ($this->isLoggedIn) {
+            $buffer = zlib_decode($buffer);
+        }
 
-                    if ($playStatus->status === PlayStatusPacket::LOGIN_SUCCESS) {
+        /** @var DataPacket $packet */
+        foreach (PacketBatch::decodePackets(
+            new BinaryStream($buffer), ProxyServer::getPacketSerializerContext(), PacketPool::getInstance()
+        ) as $packet) {
+            switch ($packet->pid()) {
+                case ProtocolInfo::NETWORK_SETTINGS_PACKET:
+                    /** @var NetworkSettingsPacket $packet */
+                    // TODO: handle algorithms and compression, for now let's force zlib
+                    $this->isLoggedIn = true;
+
+                    /** @var EncapsulatedPacket $encapsulated */
+                    $encapsulated = $this->session->getConnectedClient()->cachedPackets[ProtocolInfo::LOGIN_PACKET];
+                    $this->session->sendEncapsulatedBuffer($encapsulated->buffer);
+                    break;
+                case ProtocolInfo::PLAY_STATUS_PACKET:
+                    /** @var PlayStatusPacket $packet */
+                    if ($packet->status === PlayStatusPacket::LOGIN_SUCCESS) {
                         /** @var ClientCacheStatusPacket $clientCache */
                         $clientCache = $this->session->getConnectedClient()->cachedPackets[ProtocolInfo::CLIENT_CACHE_STATUS_PACKET];
                         $this->session->sendDataPacket($clientCache);
-                        $this->session->getProxy()->getLogger()->info("Login success on server!");
-                    } elseif ($playStatus->status === PlayStatusPacket::PLAYER_SPAWN) {
+                        $this->session->getProxy()->getLogger()->info("Login success on target server!");
+                    } elseif ($packet->status === PlayStatusPacket::PLAYER_SPAWN) {
                         $movePlayer = new MovePlayerPacket();
-                        $movePlayer->entityRuntimeId = $this->session->getConnectedClient()->getProxyRuntimeID();
+                        $movePlayer->actorRuntimeId = $this->session->getConnectedClient()->getProxyRuntimeID();
                         $movePlayer->position = $this->startGamePacket->playerPosition;
                         $movePlayer->mode = MovePlayerPacket::MODE_TELEPORT;
                         $movePlayer->pitch = 0;
@@ -86,9 +105,6 @@ class ConnectedServerHandler
                     }
                     break;
                 case ProtocolInfo::RESOURCE_PACKS_INFO_PACKET:
-                    $resourceInfo = new ResourcePacksInfoPacket($buffer);
-                    $resourceInfo->decode();
-
                     $packResponse = new ResourcePackClientResponsePacket();
                     $packResponse->status = ResourcePackClientResponsePacket::STATUS_HAVE_ALL_PACKS;
                     $this->session->sendDataPacket($packResponse);
@@ -99,23 +115,23 @@ class ConnectedServerHandler
                     $this->session->sendDataPacket($packResponse);
                     break;
                 case ProtocolInfo::START_GAME_PACKET:
-                    $this->startGamePacket = new StartGamePacket($buffer);
-                    $this->startGamePacket->decode();
+                    /** @var StartGamePacket $packet */
+                    $this->startGamePacket = $packet;
 
-                    // I think i need to teleport player to spawn point of start game
+                    // I think I need to teleport player to spawn point of start game
                     // and even before forward chunks and network chunk publisher
 
-                    // Here i am following the legacy client sequence
+                    // Here I am following the legacy client sequence
 
-                    /** @var BatchPacket $requestChunkRadius */
+                    /** @var DataPacket $requestChunkRadius */
                     $requestChunkRadius = $this->session->getConnectedClient()->cachedPackets[ProtocolInfo::REQUEST_CHUNK_RADIUS_PACKET];
-                    $this->session->sendEncapsulatedBuffer($requestChunkRadius->getBuffer());
+                    $this->session->sendDataPacket($requestChunkRadius);
 
                     $tickSync = TickSyncPacket::request(time());
                     $this->session->sendDataPacket($tickSync);
 
                     $movePlayer = new MovePlayerPacket();
-                    $movePlayer->entityRuntimeId = $this->startGamePacket->entityRuntimeId;
+                    $movePlayer->actorRuntimeId = $this->startGamePacket->actorRuntimeId;
                     $movePlayer->position = $this->startGamePacket->playerPosition;
                     $movePlayer->pitch = 0;
                     $movePlayer->yaw = 0;
@@ -123,179 +139,169 @@ class ConnectedServerHandler
                     $this->session->sendDataPacket($movePlayer);
                     break;
                 case ProtocolInfo::CHUNK_RADIUS_UPDATED_PACKET:
-                    $radiusUpdated = new ChunkRadiusUpdatedPacket($buffer);
-                    $radiusUpdated->decode();
+                    /** @var ChunkRadiusUpdatedPacket $packet */
                     // can hook :P
-                    $this->session->getProxy()->getLogger()->info("Chunk radius is $radiusUpdated->radius");
+                    $this->session->getProxy()->getLogger()->info("Chunk radius is $packet->radius");
 
                     $initPlayer = new SetLocalPlayerAsInitializedPacket();
-                    $initPlayer->entityRuntimeId = $this->startGamePacket->entityRuntimeId;
+                    $initPlayer->actorRuntimeId = $this->startGamePacket->actorRuntimeId;
                     $this->session->sendDataPacket($initPlayer);
                     break;
                 case ProtocolInfo::NETWORK_CHUNK_PUBLISHER_UPDATE_PACKET:
-                    $chunkPublisher = new NetworkChunkPublisherUpdatePacket($buffer);
-                    $chunkPublisher->decode();
+                    /** @var NetworkChunkPublisherUpdatePacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($chunkPublisher);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::LEVEL_CHUNK_PACKET:
-                    $levelChunk = new LevelChunkPacket($buffer);
-                    $levelChunk->decode();
+                    /** @var LevelChunkPacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($levelChunk);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::DISCONNECT_PACKET:
                     $this->session->getConnectedClient()->cancelConnection();
                     break;
                 case ProtocolInfo::AVAILABLE_COMMANDS_PACKET:
-                    $availableCommands = new AvailableCommandsPacket($buffer);
-                    $availableCommands->decode();
+                    /** @var AvailableCommandsPacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($availableCommands);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::UPDATE_ATTRIBUTES_PACKET:
-                    $updateAttributes = new UpdateAttributesPacket($buffer);
-                    $updateAttributes->decode();
-                    $updateAttributes->entityRuntimeId = $this->proxyEntityID;
+                    /** @var UpdateAttributesPacket $packet */
+                    $packet->actorRuntimeId = $this->proxyEntityID;
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($updateAttributes);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::ADD_PLAYER_PACKET:
-                    $addPlayer = new AddPlayerPacket($buffer);
-                    $addPlayer->decode();
+                    /** @var AddPlayerPacket $packet */
 
                     // Let's go!
-                    $this->nearbyPlayers[$addPlayer->username] = $addPlayer->entityRuntimeId;
+                    // TODO $this->nearbyPlayers[$addPlayer->username] = $packet->actorRuntimeId;
 
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($addPlayer);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::SET_TIME_PACKET:
-                    $time = new SetTimePacket($buffer);
-                    $time->decode();
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($time);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
-                case ProtocolInfo::ADVENTURE_SETTINGS_PACKET:
-                    $adventureSettings = new AdventureSettingsPacket($buffer);
-                    $adventureSettings->entityUniqueId = $this->proxyEntityID;
-                    $adventureSettings->decode();
+                // case ProtocolInfo::ADVENTURE_SETTINGS_PACKET:
+                //    $adventureSettings = new AdventureSettingsPacket($buffer);
+                //    $adventureSettings->entityUniqueId = $this->proxyEntityID;
+                //    $adventureSettings->decode();
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($adventureSettings);
-                    break;
+                //    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($adventureSettings);
+                //    break;
                 case ProtocolInfo::SET_ACTOR_DATA_PACKET:
-                    $setActorData = new SetActorDataPacket($buffer);
-                    $setActorData->decode();
-                    $setActorData->entityRuntimeId = $this->proxyEntityID;
+                    /** @var SetActorDataPacket $packet */
+                    $packet->actorRuntimeId = $this->proxyEntityID;
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($setActorData);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::TEXT_PACKET:
-                    $textPacket = new TextPacket($buffer);
-                    $textPacket->decode();
+                    /** @var TextPacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($textPacket);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::MOB_EFFECT_PACKET:
-                    $mobEffect = new MobEffectPacket($buffer);
-                    $mobEffect->decode();
+                    /** @var MobEffectPacket $packet */
                     // can hook :P
-                    $mobEffect->entityRuntimeId = $this->proxyEntityID;
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($mobEffect);
+                    $packet->actorRuntimeId = $this->proxyEntityID;
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::MOVE_PLAYER_PACKET:
-                    // lol we can actually modify other player positions to client
+                    // lol we can actually modify other player positions to a client
                     break;
                 case ProtocolInfo::INVENTORY_CONTENT_PACKET:
-                    $invContent = new InventoryContentPacket($buffer);
-                    $invContent->decode();
+                    /** @var InventoryContentPacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($invContent);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::INVENTORY_SLOT_PACKET:
-                    $invSlot = new InventorySlotPacket($buffer);
-                    $invSlot->decode();
+                    /** @var InventorySlotPacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($invSlot);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::CREATIVE_CONTENT_PACKET:
-                    $creativeContent = new CreativeContentPacket($buffer);
-                    $creativeContent->decode();
+                    /** @var CreativeContentPacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($creativeContent);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::CRAFTING_DATA_PACKET:
-                    $crafting = new CraftingDataPacket($buffer);
-                    $crafting->decode();
+                    /** @var CraftingDataPacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($crafting);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::SET_DISPLAY_OBJECTIVE_PACKET:
-                    $display = new SetDisplayObjectivePacket($buffer);
-                    $display->decode();
+                    /** @var SetDisplayObjectivePacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($display);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::REMOVE_OBJECTIVE_PACKET:
-                    $removeObj = new RemoveObjectivePacket($buffer);
-                    $removeObj->decode();
+                    /** @var RemoveObjectivePacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($removeObj);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::SET_SCORE_PACKET:
-                    $setScore = new SetScorePacket($buffer);
-                    $setScore->decode();
+                    /** @var SetScorePacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($setScore);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::LEVEL_EVENT_PACKET:
-                    $levelEvent = new LevelEventPacket($buffer);
-                    $levelEvent->decode();
+                    /** @var LevelEventPacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($levelEvent);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::LEVEL_SOUND_EVENT_PACKET:
-                    $sound = new LevelSoundEventPacket($buffer);
-                    $sound->decode();
+                    /** @var LevelSoundEventPacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($sound);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::MOB_EQUIPMENT_PACKET:
-                    $mobEquip = new MobEquipmentPacket($buffer);
-                    $mobEquip->decode();
-                    $mobEquip->entityRuntimeId = $this->proxyEntityID;
+                    /** @var MobEquipmentPacket $packet */
+                    $packet->actorRuntimeId = $this->proxyEntityID;
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($mobEquip);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::UPDATE_BLOCK_PACKET:
-                    $updateBlock = new UpdateBlockPacket($buffer);
-                    $updateBlock->decode();
+                    /** @var UpdateBlockPacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($updateBlock);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::SET_TITLE_PACKET:
-                    $setTitle = new SetTitlePacket($buffer);
-                    $setTitle->decode();
+                    /** @var SetTitlePacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($setTitle);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::PLAYER_LIST_PACKET:
-                    $playerList = new PlayerListPacket($buffer);
-                    $playerList->decode();
+                    /** @var PlayerListPacket $packet */
                     // can hook :P
                     // TODO: cache player IDS and remove when switching server
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($playerList);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                 case ProtocolInfo::MODAL_FORM_REQUEST_PACKET:
-                    $modalReq = new ModalFormRequestPacket($buffer);
-                    $modalReq->decode();
+                    /** @var ModalFormRequestPacket $packet */
                     // can hook :P
-                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($modalReq);
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     break;
                     // TODO: transfer
+                case ProtocolInfo::SET_ACTOR_MOTION_PACKET:
+                    /** @var SetActorMotionPacket $packet */
+                    $packet->actorRuntimeId = $this->proxyEntityID;
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
+                    break;
+                case ProtocolInfo::AVAILABLE_ACTOR_IDENTIFIERS_PACKET:
+                case ProtocolInfo::BIOME_DEFINITION_LIST_PACKET:
+                    // we already sent it before
+                    // $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
+                    break;
+                case ProtocolInfo::SERVER_TO_CLIENT_HANDSHAKE_PACKET:
+                    /** @var ServerToClientHandshakePacket $packet */
+                    $jwt = JWT::decode($packet->jwt, new Key(null, 'ES384'));
+                    break;
                 default:
-                    $packet = PacketPool::getPacket($buffer);
                     $this->session->getProxy()->getLogger()->info("Not implemented S->P {$packet->getName()}");
+                    // forward
+                    $this->session->getConnectedClient()->getClientSession()->sendDataPacket($packet);
                     return;
             }
         }

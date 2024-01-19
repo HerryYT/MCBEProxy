@@ -4,14 +4,16 @@
 namespace proxy;
 
 
+use GlobalLogger;
 use pocketmine\math\Vector3;
+use pocketmine\nbt\tag\CompoundTag;
 use pocketmine\network\mcpe\protocol\AnimatePacket;
-use pocketmine\network\mcpe\protocol\BatchPacket;
 use pocketmine\network\mcpe\protocol\BiomeDefinitionListPacket;
 use pocketmine\network\mcpe\protocol\ChunkRadiusUpdatedPacket;
 use pocketmine\network\mcpe\protocol\ClientCacheStatusPacket;
 use pocketmine\network\mcpe\protocol\CommandRequestPacket;
 use pocketmine\network\mcpe\protocol\CreativeContentPacket;
+use pocketmine\network\mcpe\protocol\DataPacket;
 use pocketmine\network\mcpe\protocol\InteractPacket;
 use pocketmine\network\mcpe\protocol\InventoryTransactionPacket;
 use pocketmine\network\mcpe\protocol\LevelEventPacket;
@@ -20,30 +22,41 @@ use pocketmine\network\mcpe\protocol\LoginPacket;
 use pocketmine\network\mcpe\protocol\MobEquipmentPacket;
 use pocketmine\network\mcpe\protocol\ModalFormResponsePacket;
 use pocketmine\network\mcpe\protocol\MovePlayerPacket;
+use pocketmine\network\mcpe\protocol\NetworkSettingsPacket;
 use pocketmine\network\mcpe\protocol\PacketPool;
 use pocketmine\network\mcpe\protocol\PlayerActionPacket;
 use pocketmine\network\mcpe\protocol\PlayStatusPacket;
 use pocketmine\network\mcpe\protocol\ProtocolInfo;
 use pocketmine\network\mcpe\protocol\RequestChunkRadiusPacket;
+use pocketmine\network\mcpe\protocol\RequestNetworkSettingsPacket;
 use pocketmine\network\mcpe\protocol\ResourcePackClientResponsePacket;
 use pocketmine\network\mcpe\protocol\ResourcePacksInfoPacket;
 use pocketmine\network\mcpe\protocol\ResourcePackStackPacket;
+use pocketmine\network\mcpe\protocol\serializer\NetworkNbtSerializer;
+use pocketmine\network\mcpe\protocol\serializer\PacketBatch;
 use pocketmine\network\mcpe\protocol\StartGamePacket;
 use pocketmine\network\mcpe\protocol\TextPacket;
 use pocketmine\network\mcpe\protocol\TickSyncPacket;
+use pocketmine\network\mcpe\protocol\types\BlockPosition;
+use pocketmine\network\mcpe\protocol\types\CacheableNbt;
 use pocketmine\network\mcpe\protocol\types\DimensionIds;
 use pocketmine\network\mcpe\protocol\types\Experiments;
 use pocketmine\network\mcpe\protocol\types\GameMode;
+use pocketmine\network\mcpe\protocol\types\LevelSettings;
+use pocketmine\network\mcpe\protocol\types\NetworkPermissions;
 use pocketmine\network\mcpe\protocol\types\PlayerMovementSettings;
 use pocketmine\network\mcpe\protocol\types\PlayerMovementType;
 use pocketmine\network\mcpe\protocol\types\SpawnSettings;
+use pocketmine\utils\BinaryStream;
 use raklib\protocol\EncapsulatedPacket;
 use raklib\utils\InternetAddress;
+use Ramsey\Uuid\Uuid;
 
 class ConnectedClientHandler
 {
     private ClientSession $session;
-    private string $username;
+    private bool $isLoggedIn = false;
+    private string $username = '';
 
     public array $cachedPackets = [];
 
@@ -52,209 +65,209 @@ class ConnectedClientHandler
     public function __construct(ClientSession $session)
     {
         $this->session = $session;
+        // hack once again...
     }
 
     public function handleMinecraft(EncapsulatedPacket $encapsulated): void {
         // TODO: encryption (ez)
-        $batch = new BatchPacket($encapsulated->buffer);
-        $batch->decode();
 
-        foreach ($batch->getPackets() as $buffer) {
-            $pid = ord($buffer[0]);
+        $buffer = substr($encapsulated->buffer, 1);
+        if ($this->isLoggedIn) {
+            $buffer = zlib_decode($buffer);
+        }
+
+        /** @var DataPacket $packet */
+        foreach (PacketBatch::decodePackets(new BinaryStream($buffer), ProxyServer::getPacketSerializerContext(), PacketPool::getInstance()) as $packet) {
             if (($session = $this->getServerSession()) != null) {
                 if ($session->isConnected()) {
-                    switch ($pid) {
+                    switch ($packet->pid()) {
                         case ProtocolInfo::TEXT_PACKET:
                             // Handled in the next switch
                             break;
                         case ProtocolInfo::MOVE_PLAYER_PACKET:
-                            $movePlayer = new MovePlayerPacket($buffer);
-                            $movePlayer->decode();
-
-                            $movePlayer->entityRuntimeId = $this->getServerSession()->getConnectedServer()->startGamePacket->entityRuntimeId;
-                            $this->getServerSession()->sendDataPacket($movePlayer);
+                            /** @var MovePlayerPacket $packet */
+                            $packet->actorRuntimeId = $this->getServerSession()->getConnectedServer()->startGamePacket->actorRuntimeId;
+                            $this->getServerSession()->sendDataPacket($packet);
                             break;
                         case ProtocolInfo::ANIMATE_PACKET:
-                            $animate = new AnimatePacket($buffer);
-                            $animate->decode();
-
                             // Forward with fixed entity runtime id
-                            $animate->entityRuntimeId = $this->getServerSession()->getConnectedServer()->startGamePacket->entityRuntimeId;
-                            $this->getServerSession()->sendDataPacket($animate);
+                            /** @var AnimatePacket $packet */
+                            $packet->actorRuntimeId = $this->getServerSession()->getConnectedServer()->startGamePacket->actorRuntimeId;
+                            $this->getServerSession()->sendDataPacket($packet);
                             break;
                         case ProtocolInfo::PLAYER_ACTION_PACKET:
-                            $action = new PlayerActionPacket($buffer);
-                            $action->decode();
-
                             // Forward with fixed entity runtime id
-                            $action->entityRuntimeId = $this->getServerSession()->getConnectedServer()->startGamePacket->entityRuntimeId;
-                            $this->getServerSession()->sendDataPacket($action);
+                            /** @var PlayerActionPacket $packet */
+                            $packet->actorRuntimeId = $this->getServerSession()->getConnectedServer()->startGamePacket->actorRuntimeId;
+                            $this->getServerSession()->sendDataPacket($packet);
                             break;
                         case ProtocolInfo::INVENTORY_TRANSACTION_PACKET:
-                            $invTransaction = new InventoryTransactionPacket($buffer);
-                            $invTransaction->decode();
-                            $this->getServerSession()->sendDataPacket($invTransaction);
+                            /** @var InventoryTransactionPacket $packet */
+                            $this->getServerSession()->sendDataPacket($packet);
                             break;
                         case ProtocolInfo::LEVEL_SOUND_EVENT_PACKET:
-                            $levelSound = new LevelSoundEventPacket($buffer);
-                            $levelSound->decode();
-                            $this->getServerSession()->sendDataPacket($levelSound);
+                            /** @var LevelSoundEventPacket $packet */
+                            $this->getServerSession()->sendDataPacket($packet);
                             break;
                         case ProtocolInfo::LEVEL_EVENT_PACKET:
-                            $levelEvent = new LevelEventPacket($buffer);
-                            $levelEvent->decode();
-                            $this->getServerSession()->sendDataPacket($levelEvent);
+                            /** @var LevelEventPacket $packet */
+                            $this->getServerSession()->sendDataPacket($packet);
                             break;
                         case ProtocolInfo::INTERACT_PACKET:
-                            $interact = new InteractPacket($buffer);
-                            $interact->decode();
+                            /** @var InteractPacket $packet */
 
-                            $this->getServerSession()->sendDataPacket($interact);
+                            $this->getServerSession()->sendDataPacket($packet);
                             break;
                         case ProtocolInfo::MOB_EQUIPMENT_PACKET:
-                            $mobEquip = new MobEquipmentPacket($buffer);
-                            $mobEquip->decode();
-
-                            $mobEquip->entityRuntimeId = $this->getServerSession()->getConnectedServer()->startGamePacket->entityRuntimeId;
-                            $this->getServerSession()->sendDataPacket($mobEquip);
+                            /** @var MobEquipmentPacket $packet */
+                            $packet->actorRuntimeId = $this->getServerSession()->getConnectedServer()->startGamePacket->actorRuntimeId;
+                            $this->getServerSession()->sendDataPacket($packet);
                             break;
                         case ProtocolInfo::MODAL_FORM_RESPONSE_PACKET:
-                            $modalRes = new ModalFormResponsePacket($buffer);
-                            $modalRes->decode();
-
-                            $this->getServerSession()->sendDataPacket($modalRes);
+                            /** @var ModalFormResponsePacket $packet */
+                            $this->getServerSession()->sendDataPacket($packet);
                             break;
                         case ProtocolInfo::COMMAND_REQUEST_PACKET:
-                            $cmdReq = new CommandRequestPacket($buffer);
-                            $cmdReq->decode();
-
-                            $this->getServerSession()->sendDataPacket($cmdReq);
+                            /** @var CommandRequestPacket $packet */
+                            $this->getServerSession()->sendDataPacket($packet);
                             break;
                         default:
-                            $packet = PacketPool::getPacket($buffer);
-                            $this->getClientSession()->getProxy()->getLogger()->info("Not implemented C->P {$packet->getName()}");
+                            $this->session->getProxy()->getLogger()->info("Not implemented C->P {$packet->getName()}");
                             return;
                     }
                 }
             }
 
             // To always handle
-            switch ($pid) {
+            switch ($packet->pid()) {
+                case ProtocolInfo::REQUEST_NETWORK_SETTINGS_PACKET:
+                    /** @var RequestNetworkSettingsPacket $packet */
+                    $netSettings = NetworkSettingsPacket::create(1, 0, false, 0,0);
+                    $this->session->sendDataPacket($netSettings, false);
+                    $this->isLoggedIn = true;
+                    break;
                 case ProtocolInfo::LOGIN_PACKET:
-                    $login = new LoginPacket($buffer);
-                    $login->decode();
+                    /** @var LoginPacket $packet */
+                    // Cache the login packet, so it's easier for use to resend packets
+                    $this->cachedPackets[ProtocolInfo::LOGIN_PACKET] = $encapsulated;
 
-                    // Cache the login packet so it's easier for use to resend packets
-                    $this->cachedPackets[ProtocolInfo::LOGIN_PACKET] = $batch;
-
-                    $this->username = $login->username;
-                    $this->getClientSession()->getProxy()->getLogger()->info("{$login->username} is trying to join proxy...");
+                    // $this->username = $packet->username;
+                    // $this->getClientSession()->getProxy()->getLogger()->info("{$packet->username} is trying
+                    // to join proxy...");
+                    GlobalLogger::get()->info("Client is joining proxy...");
 
                     $playStatus = new PlayStatusPacket();
                     $playStatus->status = PlayStatusPacket::LOGIN_SUCCESS;
-                    $this->getClientSession()->sendDataPacket($playStatus);
+                    $this->session->sendDataPacket($playStatus);
 
                     $resInfo = new ResourcePacksInfoPacket();
                     $resInfo->mustAccept = false;
                     $resInfo->hasScripts = false;
-                    $this->getClientSession()->sendDataPacket($resInfo);
+                    $this->session->sendDataPacket($resInfo);
                     break;
                 case ProtocolInfo::RESOURCE_PACK_CLIENT_RESPONSE_PACKET:
-                    $response = new ResourcePackClientResponsePacket($buffer);
-                    $response->decode();
+                    /** @var ResourcePackClientResponsePacket $packet */
 
-                    if ($response->status == ResourcePackClientResponsePacket::STATUS_HAVE_ALL_PACKS) {
+                    if ($packet->status == ResourcePackClientResponsePacket::STATUS_HAVE_ALL_PACKS) {
                         $resourcePackStack = new ResourcePackStackPacket();
                         $resourcePackStack->mustAccept = false;
                         $resourcePackStack->experiments = new Experiments([], false);
-                        $this->getClientSession()->sendDataPacket($resourcePackStack);
-                    } elseif ($response->status == ResourcePackClientResponsePacket::STATUS_COMPLETED) {
+                        $this->session->sendDataPacket($resourcePackStack);
+                    } elseif ($packet->status == ResourcePackClientResponsePacket::STATUS_COMPLETED) {
                         $eid = $this->getProxyRuntimeID();
                         $this->getClientSession()->getProxy()->getLogger()->info("Entity ID for $this->username is $eid");
-                        $startGame = new StartGamePacket();
-                        $startGame->entityUniqueId = $eid;
-                        $startGame->entityRuntimeId = $eid;
 
-                        $startGame->playerGamemode = GameMode::SURVIVAL;
-                        $startGame->playerPosition = new Vector3(0, 0, 0);
+                        $levelSettings = new LevelSettings();
+                        $levelSettings->time = 0;
+                        $levelSettings->seed = 0;
+                        $levelSettings->spawnPosition = new BlockPosition(0,0,0);
+                        $levelSettings->difficulty = 0;
+                        $levelSettings->spawnSettings = new SpawnSettings(
+                            SpawnSettings::BIOME_TYPE_DEFAULT, "", DimensionIds::OVERWORLD
+                        );
+                        $levelSettings->hasAchievementsDisabled = false;
+                        $levelSettings->worldGamemode = GameMode::SURVIVAL;
+                        $levelSettings->commandsEnabled = true;
+                        $levelSettings->isTexturePacksRequired = false;
+                        $levelSettings->rainLevel = 0;
+                        $levelSettings->lightningLevel = 0;
+                        $levelSettings->experiments = new Experiments([], false);
 
-                        $startGame->pitch = 0;
-                        $startGame->yaw = 0;
+                        $startGame = StartGamePacket::create(
+                            $eid,
+                            $eid,
+                            GameMode::SURVIVAL,
+                            new Vector3(0, 0, 0),
+                            0,
+                            0,
+                            new CacheableNbt(new CompoundTag()),
+                            $levelSettings,
+                            "",
+                            "Proxy server",
+                            "",
+                            false,
+                            new PlayerMovementSettings(PlayerMovementType::LEGACY, 0, false),
+                            0,
+                            0,
+                            "",
+                            false,
+                            "*",
+                            Uuid::uuid4(),
+                            false,
+                            false,
+                            new NetworkPermissions(false),
+                            [],
+                            0,
+                            []
+                        );
 
-                        $startGame->seed = -1;
-                        $startGame->spawnSettings = new SpawnSettings(SpawnSettings::BIOME_TYPE_DEFAULT, "", DimensionIds::OVERWORLD);
-                        $startGame->worldGamemode = GameMode::SURVIVAL;
-                        $startGame->difficulty = 0;
-                        $startGame->spawnX = 0;
-                        $startGame->spawnY = 0;
-                        $startGame->spawnZ = 0;
-
-                        $startGame->hasAchievementsDisabled = true;
-                        $startGame->time = 0;
-
-                        $startGame->eduEditionOffer = 0;
-
-                        $startGame->rainLevel = 0;
-                        $startGame->lightningLevel = 0;
-
-                        $startGame->commandsEnabled = true;
-                        $startGame->levelId = "";
-                        $startGame->worldName = "Proxy server";
-                        $startGame->experiments = new Experiments([], false);
-                        $startGame->itemTable = [];
-
-                        $startGame->isTexturePacksRequired = false;
-
-                        $startGame->playerMovementSettings = new PlayerMovementSettings(PlayerMovementType::LEGACY, 0, false);
-                        $startGame->serverSoftwareVersion = "Proxy v1";
                         $this->getClientSession()->sendDataPacket($startGame);
 
                         $creativeContent = CreativeContentPacket::create([]);
                         $this->getClientSession()->sendDataPacket($creativeContent);
 
-                        $biomeDefinition = new BiomeDefinitionListPacket();
-                        $biomeDefinition->namedtag = file_get_contents('vendor/pocketmine/bedrock-data/biome_definitions.nbt');
-                        $this->getClientSession()->sendDataPacket($biomeDefinition);
+                        $biomeDefinition = BiomeDefinitionListPacket::create(new CacheableNbt(
+                            (new NetworkNbtSerializer())->read(
+                                file_get_contents('vendor/pocketmine/bedrock-data/biome_definitions.nbt'))->mustGetCompoundTag()
+                            )
+                        );
+                        $this->session->sendDataPacket($biomeDefinition);
 
                         $playStatus = new PlayStatusPacket();
                         $playStatus->status = PlayStatusPacket::PLAYER_SPAWN;
-                        $this->getClientSession()->sendDataPacket($playStatus);
+                        $this->session->sendDataPacket($playStatus);
                     }
                     break;
                 case ProtocolInfo::CLIENT_CACHE_STATUS_PACKET:
-                    $clientCache = new ClientCacheStatusPacket($buffer);
-                    $clientCache->decode();
+                    /** @var ClientCacheStatusPacket $packet */
 
                     // NOTE: not a batch
-                    $this->cachedPackets[ProtocolInfo::CLIENT_CACHE_STATUS_PACKET] = $clientCache;
+                    $this->cachedPackets[ProtocolInfo::CLIENT_CACHE_STATUS_PACKET] = $packet;
                     break;
                 case ProtocolInfo::REQUEST_CHUNK_RADIUS_PACKET:
-                    $request = new RequestChunkRadiusPacket($buffer);
-                    $request->decode();
+                    /** @var RequestChunkRadiusPacket $packet */
 
-                    $this->cachedPackets[ProtocolInfo::REQUEST_CHUNK_RADIUS_PACKET] = $batch;
+                    $this->cachedPackets[ProtocolInfo::REQUEST_CHUNK_RADIUS_PACKET] = $packet;
 
                     $updated = new ChunkRadiusUpdatedPacket();
-                    $updated->radius = $request->radius;
-                    $this->getClientSession()->sendDataPacket($updated);
+                    $updated->radius = $packet->radius;
+                    $this->session->sendDataPacket($updated);
                     break;
                 case ProtocolInfo::TICK_SYNC_PACKET:
-                    $tickSync = new TickSyncPacket($buffer);
-                    $tickSync->decode();
+                    /** @var TickSyncPacket $packet */
 
-                    $newTickSync = TickSyncPacket::response($tickSync->getClientSendTime(), time());
-                    $this->getClientSession()->sendDataPacket($newTickSync);
+                    $newTickSync = TickSyncPacket::response($packet->getClientSendTime(), time());
+                    $this->session->sendDataPacket($newTickSync);
                     break;
                 case ProtocolInfo::SET_LOCAL_PLAYER_AS_INITIALIZED_PACKET:
-                    $this->session->getProxy()->getLogger()->info("Player {$this->username} successfully logged-ín!");
+                    $this->session->getProxy()->getLogger()->info("Player $this->username successfully logged-ín!");
 
                     $this->sendMessage("§bWelcome to the Proxy! Type */help for a list of commands!");
                     break;
                 case ProtocolInfo::TEXT_PACKET:
-                    $textPacket = new TextPacket($buffer);
-                    $textPacket->decode();
+                    /** @var TextPacket $packet */
 
-                    $message = $textPacket->message;
+                    $message = $packet->message;
                     if (substr($message, 0, 2) === "*/") {
                         // Message is proxy request
                         $actualMessage = str_replace("*/", "", $message);
@@ -284,11 +297,11 @@ class ConnectedClientHandler
                                 $targetAddress = new InternetAddress($targetIp, $targetPort, 4);
                                 if ($this->serverSession) {
                                     $this->sendMessage("Transferring to {$targetAddress->toString()}...");
-                                    $this->session->getProxy()->getLogger()->info("Transferring {$this->username} to {$targetAddress->toString()}...");
+                                    $this->session->getProxy()->getLogger()->info("Transferring $this->username to {$targetAddress->toString()}...");
                                 } else {
                                     $this->serverSession = new ServerSession($this->session->getProxy(), $this);
                                     $this->sendMessage("Connecting to {$targetAddress->toString()}...");
-                                    $this->session->getProxy()->getLogger()->info("Connecting {$this->username} to {$targetAddress->toString()}...");
+                                    $this->session->getProxy()->getLogger()->info("Connecting $this->username to {$targetAddress->toString()}...");
                                 }
                                 $this->serverSession->connect($targetAddress);
                                 break;
@@ -299,10 +312,10 @@ class ConnectedClientHandler
                                 $this->sendMessage("Command not found! try using */help for a list of commands");
                         }
                     } else {
-                        // Sadly we have to handle that shit here
+                        // Sadly, we have to handle that shit here
                         if (($session = $this->getServerSession()) != null) {
                             if ($session->isConnected()) {
-                                $session->sendDataPacket($textPacket);
+                                $session->sendDataPacket($packet);
                             }
                         }
                     }

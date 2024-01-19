@@ -14,6 +14,7 @@ use raklib\protocol\OpenConnectionReply1;
 use raklib\protocol\OpenConnectionReply2;
 use raklib\protocol\OpenConnectionRequest1;
 use raklib\protocol\OpenConnectionRequest2;
+use raklib\protocol\PacketSerializer;
 use raklib\utils\InternetAddress;
 
 class ClientSession extends NetworkSession
@@ -54,25 +55,23 @@ class ClientSession extends NetworkSession
         $pid = ord($packet->buffer[0]);
         switch ($pid) {
             case MessageIdentifiers::ID_CONNECTED_PING:
-                $connectedPing = new ConnectedPing($packet->buffer);
-                $connectedPing->decode();
+                $connectedPing = new ConnectedPing();
+                $connectedPing->decode(new PacketSerializer($packet->buffer));
 
                 $connectedPong = new ConnectedPong();
                 $connectedPong->sendPingTime = $connectedPing->sendPingTime;
                 $connectedPong->sendPongTime = time();
-                $connectedPong->encode();
-                $this->sendEncapsulatedBuffer($connectedPong->getBuffer());
+                $this->sendEncapsulatedBuffer(ProxyServer::encodePacket($connectedPong));
                 break;
             case MessageIdentifiers::ID_CONNECTION_REQUEST:
-                $connReq = new ConnectionRequest($packet->buffer);
-                $connReq->decode();
+                $connReq = new ConnectionRequest();
+                $connReq->decode(new PacketSerializer($packet->buffer));
 
                 $connReqAccepted = new ConnectionRequestAccepted();
                 $connReqAccepted->sendPingTime = $connReq->sendPingTime;
                 $connReqAccepted->sendPongTime = time();
                 $connReqAccepted->address = $this->clientAddress;
-                $connReqAccepted->encode();
-                $this->sendEncapsulatedBuffer($connReqAccepted->getBuffer());
+                $this->sendEncapsulatedBuffer(ProxyServer::encodePacket($connReqAccepted));
                 break;
             case MessageIdentifiers::ID_NEW_INCOMING_CONNECTION:
                 $this->proxyServer->getLogger()->info("Connection with {$this->clientAddress->toString()} successfully established!");
@@ -92,19 +91,18 @@ class ClientSession extends NetworkSession
     }
 
     private function handleOpenConnectionRequestOne(string $buffer): void {
-        $reqOne = new OpenConnectionRequest1($buffer);
-        $reqOne->decode();
+        $reqOne = new OpenConnectionRequest1();
+        $reqOne->decode(new PacketSerializer($buffer));
 
         $replyOne = new OpenConnectionReply1();
         $replyOne->serverID = $this->proxyServer->getServerID();
         $replyOne->mtuSize = $reqOne->mtuSize + 28;
-        $replyOne->encode();
-        $this->sendBuffer($replyOne->getBuffer());
+        $this->sendBuffer(ProxyServer::encodePacket($replyOne));
     }
 
     private function handleOpenConnectionRequestTwo(string $buffer): void {
-        $reqTwo = new OpenConnectionRequest2($buffer);
-        $reqTwo->decode();
+        $reqTwo = new OpenConnectionRequest2();
+        $reqTwo->decode(new PacketSerializer($buffer));
 
         $replyTwo = new OpenConnectionReply2();
         $replyTwo->mtuSize = $reqTwo->mtuSize;
@@ -113,8 +111,7 @@ class ClientSession extends NetworkSession
 
         $replyTwo->clientAddress = $this->clientAddress;
         $replyTwo->serverID = $this->proxyServer->getServerID();
-        $replyTwo->encode();
-        $this->sendBuffer($replyTwo->getBuffer());
+        $this->sendBuffer(ProxyServer::encodePacket($replyTwo));
     }
 
     public function isConnected(): bool {

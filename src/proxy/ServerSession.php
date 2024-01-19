@@ -4,8 +4,9 @@
 namespace proxy;
 
 
-use pocketmine\network\mcpe\protocol\BatchPacket;
+use GlobalLogger;
 use pocketmine\network\mcpe\protocol\ProtocolInfo;
+use pocketmine\network\mcpe\protocol\RequestNetworkSettingsPacket;
 use raklib\protocol\ConnectedPing;
 use raklib\protocol\ConnectionRequest;
 use raklib\protocol\ConnectionRequestAccepted;
@@ -16,9 +17,10 @@ use raklib\protocol\OpenConnectionReply1;
 use raklib\protocol\OpenConnectionReply2;
 use raklib\protocol\OpenConnectionRequest1;
 use raklib\protocol\OpenConnectionRequest2;
+use raklib\protocol\PacketSerializer;
 use raklib\protocol\UnconnectedPing;
 use raklib\protocol\UnconnectedPong;
-use raklib\server\UDPServerSocket;
+use raklib\server\ServerSocket;
 use raklib\utils\InternetAddress;
 
 class ServerSession extends NetworkSession
@@ -28,7 +30,7 @@ class ServerSession extends NetworkSession
     private ?ConnectedServerHandler $connectedServer = null;
     private InternetAddress $fakeClientAddress;
     // The "client" socket
-    public UDPServerSocket $socket;
+    public ServerSocket $socket;
     public InternetAddress $targetAddress;
 
     public const STATUS_UNCONNECTED = 0;
@@ -48,15 +50,17 @@ class ServerSession extends NetworkSession
 
         $this->clientID = mt_rand(0, PHP_INT_MAX);
         $clientRandomPort = mt_rand(50000, 65535);
+        // was 0.0.0.0
         $this->fakeClientAddress = $bindAddress = new InternetAddress("0.0.0.0", $clientRandomPort, 4);
-        $this->socket = new UDPServerSocket($bindAddress);
+        $this->socket = new ServerSocket($bindAddress);
+        $this->socket->setBlocking(false);
 
         $this->lastPacketTime = microtime(true);
     }
 
     public function readPacket(): void {
-        if ($this->socket->readPacket($buffer, $senderIP, $senderPort)) {
-            // Maybe we switched server and we're receiving packets from the old one
+        if (($buffer = $this->socket->readPacket($senderIP, $senderPort)) != null) {
+            // Maybe we switched server, and we're receiving packets from the old one
             // if ($senderIP != $this->targetAddress->getIp() && $senderPort != $this->targetAddress->getPort()) {
             //    return;
             // }
@@ -72,11 +76,11 @@ class ServerSession extends NetworkSession
     public function process(float $currentTime): void {
         if ($this->status === self::STATUS_UNCONNECTED) {
             $this->tryUnconnectedPing();
+            GlobalLogger::get()->debug("Trying to ping target server...");
         } elseif ($this->status === self::STATUS_CONNECTED) {
             // FIXME: send just after some time, don't spam
-            if ($currentTime % 20 == 0) {
+            if ((int)$currentTime % 20 == 0) {
                 $this->sendConnectedPing();
-                var_dump(1);
             }
         }
 
@@ -93,7 +97,6 @@ class ServerSession extends NetworkSession
             return true;
         } elseif ($pid == MessageIdentifiers::ID_OPEN_CONNECTION_REPLY_2) {
             $this->handleOpenConnectionReplyTwo($buffer);
-            var_dump(11);
             return true;
         }
         return false;
@@ -104,21 +107,23 @@ class ServerSession extends NetworkSession
         $pid = ord($packet->buffer[0]);
         switch ($pid) {
             case MessageIdentifiers::ID_CONNECTION_REQUEST_ACCEPTED:
-                $connAccepted = new ConnectionRequestAccepted($packet->buffer);
-                $connAccepted->decode();
+                $connAccepted = new ConnectionRequestAccepted();
+                $connAccepted->decode(new PacketSerializer($packet->buffer));
 
                 $newIncomingConn = new NewIncomingConnection();
                 $newIncomingConn->sendPingTime = $connAccepted->sendPingTime;
                 $newIncomingConn->sendPongTime = time();
                 $newIncomingConn->address = $this->fakeClientAddress;
-                $newIncomingConn->encode();
-                $this->sendEncapsulatedBuffer($newIncomingConn->getBuffer());
+                $this->sendEncapsulatedBuffer(ProxyServer::encodePacket($newIncomingConn));
 
                 $this->connectedServer = new ConnectedServerHandler($this);
 
-                /** @var BatchPacket $login */
-                $login = $this->getConnectedClient()->cachedPackets[ProtocolInfo::LOGIN_PACKET];
-                $this->sendEncapsulatedBuffer($login->getBuffer());
+                $requestNetSettings = RequestNetworkSettingsPacket::create(ProtocolInfo::CURRENT_PROTOCOL);
+                $this->sendDataPacket($requestNetSettings, false);
+
+                // @var EncapsulatedPacket $encapsulated */
+                // $encapsulated = $this->getConnectedClient()->cachedPackets[ProtocolInfo::LOGIN_PACKET];
+                // $this->sendEncapsulatedBuffer($encapsulated->buffer);
 
                 $this->status = self::STATUS_CONNECTED;
                 break;
@@ -133,8 +138,8 @@ class ServerSession extends NetworkSession
     private function handleOpenConnectionReplyOne(string $buffer): void {
         $this->status = self::STATUS_CONNECTING;
 
-        $replyOne = new OpenConnectionReply1($buffer);
-        $replyOne->decode();
+        $replyOne = new OpenConnectionReply1();
+        $replyOne->decode(new PacketSerializer($buffer));
 
         $reqTwo = new OpenConnectionRequest2();
         $finalMtu = $replyOne->mtuSize;
@@ -144,19 +149,17 @@ class ServerSession extends NetworkSession
 
         $reqTwo->clientID = $this->clientID;
         $reqTwo->serverAddress = $this->targetAddress;
-        $reqTwo->encode();
-        $this->sendBuffer($reqTwo->getBuffer());
+        $this->sendBuffer(ProxyServer::encodePacket($reqTwo));
     }
 
     private function handleOpenConnectionReplyTwo(string $buffer): void {
-        $replyTwo = new OpenConnectionReply2($buffer);
-        $replyTwo->decode();
+        $replyTwo = new OpenConnectionReply2();
+        $replyTwo->decode(new PacketSerializer($buffer));
 
         $connReq = new ConnectionRequest();
         $connReq->clientID = $this->clientID;
         $connReq->sendPingTime = time();
-        $connReq->encode();
-        $this->sendEncapsulatedBuffer($connReq->getBuffer());
+        $this->sendEncapsulatedBuffer(ProxyServer::encodePacket($connReq));
     }
 
     public function handleUnconnected(string $buffer): bool {
@@ -170,31 +173,29 @@ class ServerSession extends NetworkSession
     }
 
     private function handleUnconnectedPong(string $buffer): void {
-        $unconnectedPong = new UnconnectedPong($buffer);
-        $unconnectedPong->decode();
+        $unconnectedPong = new UnconnectedPong();
+        $unconnectedPong->decode(new PacketSerializer($buffer));
 
         $this->getConnectedClient()->sendMessage($unconnectedPong->serverName);
 
         $reqOne = new OpenConnectionRequest1();
         $reqOne->mtuSize = ($this->mtuSize -= 30) + 30;
-        $reqOne->protocol = 10; // MC actual protocol
-        $reqOne->encode();
-        $this->sendBuffer($reqOne->getBuffer());
+        $reqOne->protocol = 11; // MC actual protocol
+        $this->sendBuffer(ProxyServer::encodePacket($reqOne));
     }
 
     // Is the target server alive??
     public function tryUnconnectedPing(): void {
         $unconnectedPing = new UnconnectedPing();
-        $unconnectedPing->pingID = time();
-        $unconnectedPing->encode();
-        $this->sendBuffer($unconnectedPing->getBuffer());
+        $unconnectedPing->sendPingTime = time();
+        $unconnectedPing->clientId = $this->clientID;
+        $this->sendBuffer(ProxyServer::encodePacket($unconnectedPing));
     }
 
     private function sendConnectedPing(): void {
         $connPing = new ConnectedPing();
         $connPing->sendPingTime = time();
-        $connPing->encode();
-        $this->sendEncapsulatedBuffer($connPing->getBuffer());
+        $this->sendEncapsulatedBuffer(ProxyServer::encodePacket($connPing));
     }
 
     public function connect(InternetAddress $targetAddress): void {

@@ -4,13 +4,19 @@
 namespace proxy;
 
 
-use pocketmine\network\mcpe\protocol\BatchPacket;
 use pocketmine\network\mcpe\protocol\DataPacket;
+use pocketmine\network\mcpe\protocol\serializer\ItemTypeDictionary;
+use pocketmine\network\mcpe\protocol\serializer\PacketBatch;
+use pocketmine\network\mcpe\protocol\serializer\PacketSerializerContext;
+use pocketmine\network\mcpe\protocol\types\ItemTypeEntry;
+use pocketmine\utils\BinaryStream;
 use raklib\protocol\ACK;
 use raklib\protocol\Datagram;
 use raklib\protocol\EncapsulatedPacket;
 use raklib\protocol\NACK;
 use raklib\protocol\PacketReliability;
+use raklib\protocol\PacketSerializer;
+use raklib\protocol\SplitPacketInfo;
 
 abstract class NetworkSession
 {
@@ -28,13 +34,20 @@ abstract class NetworkSession
 
     protected int $mtuSize = self::MAX_MTU_SIZE;
 
+    // Dktapps facepalms :), like mojang ones
+    // this shi just for some stupid items
+    private PacketSerializerContext $serializerContext;
+
     public function __construct()
     {
         $this->outputOrderingIndexes = array_fill(0, 32, 0);
+        $this->serializerContext = new PacketSerializerContext(new ItemTypeDictionary([
+            new ItemTypeEntry('minecraft:shield', 358, false)
+        ]));
     }
 
     /**
-     * Tick is for RakNet stuff, while process is for session things.
+     * Tick is for RakNet stuff, while a process is for session things.
      *
      * @param float $currentTime
      */
@@ -42,9 +55,8 @@ abstract class NetworkSession
         if (count($this->inputSequenceNumbers) > 0) {
             $ack = new ACK();
             $ack->packets = $this->inputSequenceNumbers;
-            $ack->encode();
 
-            $this->sendBuffer($ack->getBuffer());
+            $this->sendBuffer(ProxyServer::encodePacket($ack));
             $this->inputSequenceNumbers = [];
         }
 
@@ -69,8 +81,8 @@ abstract class NetworkSession
     abstract function handleDatagram(string $buffer): bool;
 
     private function handleAcknowledgement(string $buffer) {
-        $ack = new ACK($buffer);
-        $ack->decode();
+        $ack = new ACK();
+        $ack->decode(new PacketSerializer($buffer));
         foreach ($ack->packets as $seq) {
             if (isset($this->outputBackupQueue[$seq])) {
                 unset($this->outputBackupQueue[$seq]);
@@ -79,8 +91,8 @@ abstract class NetworkSession
     }
 
     private function handleNacknowledgement(string $buffer) {
-        $nack = new NACK($buffer);
-        $nack->decode();
+        $nack = new NACK();
+        $nack->decode(new PacketSerializer($buffer));
         foreach ($nack->packets as $seq) {
             if (isset($this->outputBackupQueue[$seq])) {
                 $this->sendBuffer($this->outputBackupQueue[$seq]->getBuffer());
@@ -94,11 +106,8 @@ abstract class NetworkSession
     }
 
     private function handleConnectedDatagram(string $buffer): void {
-        $datagram = new Datagram($buffer);
-        $datagram->decode();
-
-        // Just because yes :)
-        if ($datagram->seqNumber === null) return;
+        $datagram = new Datagram();
+        $datagram->decode(new PacketSerializer($buffer));
 
         $this->inputSequenceNumbers[] = $datagram->seqNumber;
 
@@ -110,7 +119,7 @@ abstract class NetworkSession
         // TODO: missing packets
 
         foreach ($datagram->packets as $packet) {
-            if ($packet->hasSplit) {
+            if ($packet->splitInfo !== null) {
                 $this->handleSplit($packet);
             } else {
                 $this->handleEncapsulated($packet);
@@ -119,11 +128,12 @@ abstract class NetworkSession
     }
 
     protected function handleSplit(EncapsulatedPacket $packet): void {
-        $this->splits[$packet->splitID][$packet->splitIndex] = $packet;
-        if ($packet->splitCount == count($this->splits[$packet->splitID])) {
+        $splitInfo = $packet->splitInfo;
+        $this->splits[$splitInfo->getId()][$splitInfo->getPartIndex()] = $packet;
+        if ($splitInfo->getTotalPartCount() == count($this->splits[$splitInfo->getId()])) {
             $buffer = "";
-            for ($i = 0; $i < count($this->splits[$packet->splitID]); $i++) {
-                $split = $this->splits[$packet->splitID][$i];
+            for ($i = 0; $i < count($this->splits[$splitInfo->getId()]); $i++) {
+                $split = $this->splits[$splitInfo->getId()][$i];
                 $buffer .= $split->buffer;
             }
 
@@ -135,7 +145,7 @@ abstract class NetworkSession
                 $encapsulated->orderIndex = $packet->orderIndex;
                 $encapsulated->orderChannel = $packet->orderChannel;
             }
-            unset($this->splits[$packet->splitID]);
+            unset($this->splits[$splitInfo->getId()]);
             $this->handleEncapsulated($encapsulated);
         }
     }
@@ -166,11 +176,12 @@ abstract class NetworkSession
             $splitID = ++$this->splitID % 65536;
             foreach($buffers as $count => $buffer){
                 $pk = new EncapsulatedPacket();
-                $pk->splitID = $splitID;
-                $pk->hasSplit = true;
-                $pk->splitCount = $bufferCount;
+                $pk->splitInfo = new SplitPacketInfo(
+                    $splitID,
+                    $count,
+                    $bufferCount
+                );
                 $pk->reliability = $encapsulated->reliability;
-                $pk->splitIndex = $count;
                 $pk->buffer = $buffer;
 
                 if (PacketReliability::isReliable($pk->reliability)) {
@@ -195,17 +206,20 @@ abstract class NetworkSession
         $packet = new Datagram();
         $packet->packets = [$encapsulated];
         $packet->seqNumber = $this->outputSequenceNumber++;
-        $packet->encode();
         $this->outputBackupQueue[$packet->seqNumber] = $packet;
-        $this->sendBuffer($packet->getBuffer());
+        $this->sendBuffer(ProxyServer::encodePacket($packet));
     }
 
     // Not related to RakNet but meh... we don't like duplicates
-    public function sendDataPacket(DataPacket $packet): void {
-        $batch = new BatchPacket();
-        $batch->addPacket($packet);
-        $batch->encode();
-        $this->sendEncapsulatedBuffer($batch->getBuffer(), PacketReliability::RELIABLE_ORDERED);
+    public function sendDataPacket(DataPacket $packet, bool $comp = true): void {
+        $stream = new BinaryStream();
+        PacketBatch::encodePackets($stream, $this->serializerContext, [$packet]);
+        if ($comp) {
+            $buffer = zlib_encode($stream->getBuffer(), ZLIB_ENCODING_RAW, 7);
+        } else {
+            $buffer = $stream->getBuffer();
+        }
+        $this->sendEncapsulatedBuffer("\xfe" . $buffer, PacketReliability::RELIABLE_ORDERED);
     }
 
     abstract function handleEncapsulated(EncapsulatedPacket $packet): void;

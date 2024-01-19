@@ -4,37 +4,44 @@
 namespace proxy;
 
 
-use pocketmine\network\mcpe\protocol\DisconnectPacket;
+use GlobalLogger;
+use Logger;
 use pocketmine\network\mcpe\protocol\ProtocolInfo;
-use pocketmine\utils\MainLogger;
+use pocketmine\network\mcpe\protocol\serializer\ItemTypeDictionary;
+use pocketmine\network\mcpe\protocol\serializer\PacketSerializerContext;
+use pocketmine\network\mcpe\protocol\types\ItemTypeEntry;
 use raklib\protocol\MessageIdentifiers;
-use raklib\protocol\PacketReliability;
+use raklib\protocol\Packet;
+use raklib\protocol\PacketSerializer;
 use raklib\protocol\UnconnectedPing;
 use raklib\protocol\UnconnectedPong;
-use raklib\server\UDPServerSocket;
+use raklib\server\ServerSocket;
 use raklib\utils\InternetAddress;
 
 class ProxyServer
 {
-    private UDPServerSocket $socket;
+    private ServerSocket $socket;
     private array $clientSessions = [];
-    private MainLogger $logger;
+    private Logger $logger;
 
     private float $lastTick;
     private int $serverID;
 
     public const MINECRAFT_HEADER = 0xFE;
 
+    private static $packetSerializerContext = null;
+
     public function __construct()
     {
         // Start the server always on locale
         $address = new InternetAddress("0.0.0.0", 19132, 4);
-        $this->socket = new UDPServerSocket($address);
+        $this->socket = new ServerSocket($address);
+        $this->socket->setBlocking(false);
 
         $this->lastTick = microtime(true);
         $this->serverID = mt_rand(0, PHP_INT_MAX);
 
-        $this->logger = new MainLogger(__DIR__ . "/../../log.txt", false);
+        $this->logger = GlobalLogger::get();
     }
 
     /**
@@ -42,7 +49,7 @@ class ProxyServer
      */
     public function start(): void {
         while (true) {
-            if ($this->socket->readPacket($buffer, $ip, $port)) {
+            if (($buffer = $this->socket->readPacket($ip, $port)) != null) {
                 $address = new InternetAddress($ip, $port, 4);
                 if (!$this->handleUnconnected($buffer, $address)) {
                     if (($session = $this->getSession($buffer, $address)) != null) {
@@ -85,12 +92,11 @@ class ProxyServer
             /** @var ClientSession $session */
             $session = $this->clientSessions[$session->getClientAddress()->toString()];
             // If was connected to a server, disconnect him
-            if ($session->isConnected()) {
+            // if ($session->isConnected()) {
                 // TODO: not working... wtf
-                $disconnect = new DisconnectPacket();
-                $disconnect->encode();
-                $session->sendEncapsulatedBuffer($disconnect->getBuffer(), PacketReliability::RELIABLE_ORDERED);
-            }
+                // $disconnect = new DisconnectPacket();
+                // $session->sendEncapsulatedBuffer($disconnect->getBuffer(), PacketReliability::RELIABLE_ORDERED);
+            // }
             $this->getLogger()->info("Player with address {$session->getClientAddress()->toString()} disconnected!");
             unset($this->clientSessions[$session->getClientAddress()->toString()]);
         }
@@ -106,15 +112,20 @@ class ProxyServer
     }
 
     private function handleUnconnectedPing(string $buffer, InternetAddress $address): void {
-        $unconnectedPing = new UnconnectedPing($buffer);
-        $unconnectedPing->decode();
+        $unconnectedPing = new UnconnectedPing();
+        $unconnectedPing->decode(new PacketSerializer($buffer));
 
         $unconnectedPong = new UnconnectedPong();
-        $unconnectedPong->pingID = $unconnectedPing->pingID;
-        $unconnectedPong->serverID = $this->serverID;
+        $unconnectedPong->sendPingTime = $unconnectedPing->sendPingTime;
+        $unconnectedPong->serverId = $this->serverID;
         $unconnectedPong->serverName = $this->getMOTD();
-        $unconnectedPong->encode();
-        $this->sendBuffer($unconnectedPong->getBuffer(), $address);
+        $this->sendBuffer(ProxyServer::encodePacket($unconnectedPong), $address);
+    }
+
+    public static function encodePacket(Packet $packet): string {
+        $serializer = new PacketSerializer();
+        $packet->encode($serializer);
+        return $serializer->getBuffer();
     }
 
     private function getMOTD(): string {
@@ -135,11 +146,20 @@ class ProxyServer
         $this->socket->writePacket($buffer, $address->getIp(), $address->getPort());
     }
 
+    public static function getPacketSerializerContext(): PacketSerializerContext {
+        if (self::$packetSerializerContext == null) {
+            self::$packetSerializerContext = new PacketSerializerContext(new ItemTypeDictionary([
+                new ItemTypeEntry('minecraft:shield', 358, false)
+            ]));
+        }
+        return self::$packetSerializerContext;
+    }
+
     public function getServerID(): int {
         return $this->serverID;
     }
 
-    public function getLogger(): MainLogger {
+    public function getLogger(): Logger {
         return $this->logger;
     }
 }

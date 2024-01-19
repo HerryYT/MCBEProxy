@@ -1,11 +1,13 @@
 {
     "require": {
-      "pocketmine/pocketmine-mp": "3.23.1",
-      "pocketmine/raklib": "^0.12.7",
-      "pocketmine/bedrock-data": "dev-master",
-      "ext-sockets": "*"
+        "pocketmine/raklib": "0.15.1",
+        "pocketmine/bedrock-protocol": "26.0.0+bedrock-1.20.50",
+        "pocketmine/log": "^0.4.0",
+        "pocketmine/bedrock-data": "^2.7",
+        "ext-zlib": "*",
+        "firebase/php-jwt": "^6.10"
     },
     "autoload": {
-      "classmap": ["src/"]
+        "classmap": ["src/"]
     }
 }
