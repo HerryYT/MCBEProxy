@@ -1,4 +1,6 @@
 {
+    "name": "enricoangelon/mcbe-proxy",
+    "description": "A proxy for Minecraft Bedrock Edition",
     "require": {
         "pocketmine/raklib": "0.15.1",
         "pocketmine/bedrock-protocol": "26.0.0+bedrock-1.20.50",
