@@ -3,7 +3,7 @@
     "description": "A proxy for Minecraft Bedrock Edition",
     "require": {
         "pocketmine/raklib": "0.15.1",
-        "pocketmine/bedrock-protocol": "26.0.0+bedrock-1.20.50",
+        "pocketmine/bedrock-protocol": "^26.0",
         "pocketmine/log": "^0.4.0",
         "pocketmine/bedrock-data": "^2.7",
         "ext-zlib": "*",
@@ -16,5 +16,8 @@
     },
     "autoload": {
         "classmap": ["src/"]
-    }
+    },
+    "license": [
+        "proprietary"
+    ]
 }
