@@ -5,7 +5,12 @@
         "pocketmine/log": "^0.4.0",
         "pocketmine/bedrock-data": "^2.7",
         "ext-zlib": "*",
-        "firebase/php-jwt": "^6.10"
+        "firebase/php-jwt": "^6.10",
+        "ext-json": "*",
+        "ext-openssl": "*",
+        "ext-gmp": "*",
+        "ext-crypto": "^0.3.1",
+        "guzzlehttp/guzzle": "^7.8"
     },
     "autoload": {
         "classmap": ["src/"]

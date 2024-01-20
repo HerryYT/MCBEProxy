@@ -5,8 +5,11 @@ namespace proxy;
 
 
 use GlobalLogger;
+use pocketmine\network\mcpe\protocol\DataPacket;
 use pocketmine\network\mcpe\protocol\ProtocolInfo;
 use pocketmine\network\mcpe\protocol\RequestNetworkSettingsPacket;
+use pocketmine\network\mcpe\protocol\serializer\PacketBatch;
+use pocketmine\utils\BinaryStream;
 use raklib\protocol\ConnectedPing;
 use raklib\protocol\ConnectionRequest;
 use raklib\protocol\ConnectionRequestAccepted;
@@ -17,6 +20,7 @@ use raklib\protocol\OpenConnectionReply1;
 use raklib\protocol\OpenConnectionReply2;
 use raklib\protocol\OpenConnectionRequest1;
 use raklib\protocol\OpenConnectionRequest2;
+use raklib\protocol\PacketReliability;
 use raklib\protocol\PacketSerializer;
 use raklib\protocol\UnconnectedPing;
 use raklib\protocol\UnconnectedPong;
@@ -218,6 +222,26 @@ class ServerSession extends NetworkSession
 
         $this->lastPacketTime = microtime(true);
         $this->status = self::STATUS_UNCONNECTED;
+    }
+
+    // TODO: refactor
+    public function sendDataPacket(DataPacket $packet, bool $comp = true): void
+    {
+        $stream = new BinaryStream();
+        PacketBatch::encodePackets($stream, ProxyServer::getPacketSerializerContext(), [$packet]);
+        if ($comp) {
+            $buffer = zlib_encode($stream->getBuffer(), ZLIB_ENCODING_RAW, 7);
+        } else {
+            $buffer = $stream->getBuffer();
+        }
+
+        if (($encryptionHandler = $this->connectedServer->encryptionHandler) != null) {
+            if (($session = $encryptionHandler->getSession()) != null) {
+                $buffer = $session->encrypt($buffer);
+            }
+        }
+
+        $this->sendEncapsulatedBuffer("\xfe" . $buffer, PacketReliability::RELIABLE_ORDERED);
     }
 
     public function getProxy(): ProxyServer {

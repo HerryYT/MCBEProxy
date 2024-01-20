@@ -4,7 +4,10 @@
 namespace proxy;
 
 
+use Firebase\JWT\JWT;
+use Firebase\JWT\Key;
 use GlobalLogger;
+use OpenSSLAsymmetricKey;
 use pocketmine\math\Vector3;
 use pocketmine\nbt\tag\CompoundTag;
 use pocketmine\network\mcpe\protocol\AnimatePacket;
@@ -54,6 +57,8 @@ use Ramsey\Uuid\Uuid;
 
 class ConnectedClientHandler
 {
+    public const MOJANG_PUBLIC_KEY = "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAECRXueJeTDqNRRgJi/vlRufByu/2G0i2Ebt6YMar5QX/R0DIIyrJMcUpruK4QveTfJSTp3Shlq4Gk34cD/4GUWwkv0DVuzeuB+tXija7HBxii03NHDbPAD0AKnLr2wdAp";
+
     private ClientSession $session;
     private bool $isLoggedIn = false;
     private string $username = '';
@@ -62,10 +67,13 @@ class ConnectedClientHandler
 
     public ?ServerSession $serverSession = null;
 
+    public OpenSSLAsymmetricKey|null $clientPublicKey = null;
+
+    public array|null $cachedChainData = null;
+
     public function __construct(ClientSession $session)
     {
         $this->session = $session;
-        // hack once again...
     }
 
     public function handleMinecraft(EncapsulatedPacket $encapsulated): void {
@@ -148,13 +156,63 @@ class ConnectedClientHandler
                     break;
                 case ProtocolInfo::LOGIN_PACKET:
                     /** @var LoginPacket $packet */
-                    // Cache the login packet, so it's easier for use to resend packets
-                    $this->cachedPackets[ProtocolInfo::LOGIN_PACKET] = $encapsulated;
 
-                    // $this->username = $packet->username;
-                    // $this->getClientSession()->getProxy()->getLogger()->info("{$packet->username} is trying
-                    // to join proxy...");
-                    GlobalLogger::get()->info("Client is joining proxy...");
+                    // Cache the login packet, so it's easier for use to resend packets
+                    $this->cachedPackets[ProtocolInfo::LOGIN_PACKET] = $packet;
+
+                    // JWT token verification
+                    // Source(s):
+                    // https://github.com/PrismarineJS/bedrock-protocol/blob/master/src/handshake/loginVerify.js
+
+                    $getX5U = function (string $token) {
+                        [$header] = explode(".", $token);
+                        $decodedHeader = mb_convert_encoding(base64_decode($header), 'UTF-8');
+                        $jsonHeader = json_decode($decodedHeader, true);
+                        return $jsonHeader["x5u"];
+                    };
+
+                    $chain = $packet->chainDataJwt->chain;
+
+                    // get X5U from token
+                    $x5u = $getX5U($chain[0]);  // client signed one
+
+                    // get public key from X5U
+                    $publicKey = EncryptionHandler::getDer($x5u);
+                    if ($publicKey === false) {
+                        GlobalLogger::get()->error("Failed to get public key from X5U!");
+                        // TODO: disable encryption
+                    }
+
+                    // verify chain and decode data
+                    $data = [];
+                    foreach ($chain as $token) {
+                        $decodedToken = (array)JWT::decode($token, new Key($publicKey, 'ES384'));
+
+                        $x5u = $getX5U($token);
+                        if ($x5u === self::MOJANG_PUBLIC_KEY && !isset($data['extraData']['XUID'])) {
+                            GlobalLogger::get()->debug(
+                                "Verified token for {$this->session->getClientAddress()->toString()} with mojang public key"
+                            );
+                        }
+
+                        $publicKey = $decodedToken['identityPublicKey'] ? EncryptionHandler::getDer($decodedToken['identityPublicKey']) : $x5u;
+                        if ($publicKey === false) {
+                            GlobalLogger::get()->error('Failed to get public key from X5U!');
+                        }
+
+                        $data = [...$data, ...$decodedToken];
+                    }
+
+                    $this->cachedChainData = $data;
+
+                    // Save the last client public key in the format we need
+                    $this->clientPublicKey = $publicKey;
+
+                    // TODO: if client pub key is null, avoid encryption once again
+
+                    $this->username = ((array)$data['extraData'])['displayName'];
+
+                    GlobalLogger::get()->info("$this->username is trying to join proxy...");
 
                     $playStatus = new PlayStatusPacket();
                     $playStatus->status = PlayStatusPacket::LOGIN_SUCCESS;

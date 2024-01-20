@@ -4,13 +4,16 @@
 namespace proxy;
 
 
+use Exception;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
+use GlobalLogger;
 use pocketmine\network\mcpe\protocol\AddPlayerPacket;
 use pocketmine\network\mcpe\protocol\AvailableActorIdentifiersPacket;
 use pocketmine\network\mcpe\protocol\AvailableCommandsPacket;
 use pocketmine\network\mcpe\protocol\ChunkRadiusUpdatedPacket;
 use pocketmine\network\mcpe\protocol\ClientCacheStatusPacket;
+use pocketmine\network\mcpe\protocol\ClientToServerHandshakePacket;
 use pocketmine\network\mcpe\protocol\CraftingDataPacket;
 use pocketmine\network\mcpe\protocol\CreativeContentPacket;
 use pocketmine\network\mcpe\protocol\DataPacket;
@@ -19,6 +22,7 @@ use pocketmine\network\mcpe\protocol\InventorySlotPacket;
 use pocketmine\network\mcpe\protocol\LevelChunkPacket;
 use pocketmine\network\mcpe\protocol\LevelEventPacket;
 use pocketmine\network\mcpe\protocol\LevelSoundEventPacket;
+use pocketmine\network\mcpe\protocol\LoginPacket;
 use pocketmine\network\mcpe\protocol\MobEffectPacket;
 use pocketmine\network\mcpe\protocol\MobEquipmentPacket;
 use pocketmine\network\mcpe\protocol\ModalFormRequestPacket;
@@ -31,17 +35,13 @@ use pocketmine\network\mcpe\protocol\PlayStatusPacket;
 use pocketmine\network\mcpe\protocol\ProtocolInfo;
 use pocketmine\network\mcpe\protocol\RemoveObjectivePacket;
 use pocketmine\network\mcpe\protocol\ResourcePackClientResponsePacket;
-use pocketmine\network\mcpe\protocol\ResourcePacksInfoPacket;
-use pocketmine\network\mcpe\protocol\serializer\ItemTypeDictionary;
 use pocketmine\network\mcpe\protocol\serializer\PacketBatch;
-use pocketmine\network\mcpe\protocol\serializer\PacketSerializerContext;
 use pocketmine\network\mcpe\protocol\ServerToClientHandshakePacket;
 use pocketmine\network\mcpe\protocol\SetActorDataPacket;
 use pocketmine\network\mcpe\protocol\SetActorMotionPacket;
 use pocketmine\network\mcpe\protocol\SetDisplayObjectivePacket;
 use pocketmine\network\mcpe\protocol\SetLocalPlayerAsInitializedPacket;
 use pocketmine\network\mcpe\protocol\SetScorePacket;
-use pocketmine\network\mcpe\protocol\SetTimePacket;
 use pocketmine\network\mcpe\protocol\SetTitlePacket;
 use pocketmine\network\mcpe\protocol\StartGamePacket;
 use pocketmine\network\mcpe\protocol\TextPacket;
@@ -60,14 +60,31 @@ class ConnectedServerHandler
     private int $proxyEntityID;
     // public array $nearbyPlayers = [];
 
+    public EncryptionHandler $encryptionHandler;
+
+    /**
+     * @throws Exception
+     */
     public function __construct(ServerSession $session)
     {
         $this->session = $session;
+        $this->encryptionHandler = new EncryptionHandler();
         $this->proxyEntityID = $session->getConnectedClient()->getProxyRuntimeID();
+
+        // $xbl = new XboxLiveHandler();
+        // var_dump($xbl->getAuthDeviceCode());
     }
 
-    public function handleMinecraft(EncapsulatedPacket $encapsulated) {
+    public function handleMinecraft(EncapsulatedPacket $encapsulated): void
+    {
         $buffer = substr($encapsulated->buffer, 1);
+
+        if (($encryptionHandler = $this->encryptionHandler) != null) {
+            if (($session = $encryptionHandler->getSession()) != null) {
+                $buffer = $session->decrypt($buffer);
+            }
+        }
+
         if ($this->isLoggedIn) {
             $buffer = zlib_decode($buffer);
         }
@@ -76,15 +93,44 @@ class ConnectedServerHandler
         foreach (PacketBatch::decodePackets(
             new BinaryStream($buffer), ProxyServer::getPacketSerializerContext(), PacketPool::getInstance()
         ) as $packet) {
+//            var_dump($packet->getName());
             switch ($packet->pid()) {
                 case ProtocolInfo::NETWORK_SETTINGS_PACKET:
                     /** @var NetworkSettingsPacket $packet */
                     // TODO: handle algorithms and compression, for now let's force zlib
                     $this->isLoggedIn = true;
 
-                    /** @var EncapsulatedPacket $encapsulated */
-                    $encapsulated = $this->session->getConnectedClient()->cachedPackets[ProtocolInfo::LOGIN_PACKET];
-                    $this->session->sendEncapsulatedBuffer($encapsulated->buffer);
+                    /** @var LoginPacket $login */
+                    $login = $this->session->getConnectedClient()->cachedPackets[ProtocolInfo::LOGIN_PACKET];
+
+//                    $cachedClientChains = $this->session->getConnectedClient()->cachedChainData;
+
+//                    $identityChain = JWT::sign(json_encode(                        [
+//                        "certificateAuthority" => true,
+//                        "exp" => $cachedClientChains["exp"],
+//                        "identityPublicKey" => ConnectedClientHandler::MOJANG_PUBLIC_KEY,
+//                        "nfb" => $cachedClientChains["nfb"],
+//                    ]), $this->encryptionHandler->getPrivateKey(), "ES384");
+
+                    /* $chains = [
+                        [
+                        ],
+                        []
+                    ]; */
+
+//                    var_dump($login->chainDataJwt->chain);
+
+                    // $cid = base64_decode($login->chainDataJwt->chain[0]);
+                    // var_dump($cid);
+                    // var_dump(json_encode($cid, true));
+
+//                    $jwt = json_encode([
+//                        "identityPublicKey" => ConnectedClientHandler::MOJANG_PUBLIC_KEY,
+//                        "certificateAuthority" => true
+//                    ]);
+
+//                    $login->chainDataJwt->chain[0] = base64_encode(JWT::sign($jwt, $this->encryptionHandler->getPrivateKey(), "ES384"));
+                    $this->session->sendDataPacket($login);
                     break;
                 case ProtocolInfo::PLAY_STATUS_PACKET:
                     /** @var PlayStatusPacket $packet */
@@ -296,7 +342,50 @@ class ConnectedServerHandler
                     break;
                 case ProtocolInfo::SERVER_TO_CLIENT_HANDSHAKE_PACKET:
                     /** @var ServerToClientHandshakePacket $packet */
-                    $jwt = JWT::decode($packet->jwt, new Key(null, 'ES384'));
+                    GlobalLogger::get()->debug("Starting encryption handshake...");
+
+                    // $clientPublic = $this->session->getConnectedClient()->clientPublicKey;
+                    // if ($clientPublic === null) {
+                    //    $this->session->getProxy()->getLogger()->info("Client public key is null!");
+                    //    return;
+                    // TODO: disconnect from target server
+                    // }
+
+                    // Decode JWT Token
+                    [$header, $payload] = array_map(function (string $token) {
+                        return json_decode(base64_decode($token), true);
+                    }, explode(".", $packet->jwt));
+
+                    $remotePublicKey = EncryptionHandler::getDer($header["x5u"]);
+
+                    $sharedSecret = EncryptionHandler::generateSharedSecret(
+                        $this->encryptionHandler->getPrivateKey(),
+                        $remotePublicKey
+                    );
+
+//                    $hashContext = hash_init("sha256");
+//                    hash_update($hashContext, $payload["salt"]);
+//                    hash_update($hashContext, $sharedSecret);
+//                    $secretKeyBytes = hash_final($hashContext, true);
+//                    $iv = substr($secretKeyBytes, 0, 16);
+
+                    $salt = base64_decode($payload["salt"]);
+
+                    $aesKey = openssl_digest(
+                        $salt . hex2bin(
+                            str_pad(gmp_strval($sharedSecret, 16), 96, "0", STR_PAD_LEFT)
+                        ), 'sha256', true
+                    );
+
+                    GlobalLogger::get()->debug(
+                        "Encryption shared secret: $sharedSecret, salt: $salt"
+                    );
+
+                    $this->encryptionHandler->startSession($aesKey);
+
+                    GlobalLogger::get()->info("Encryption handshake completed!");
+
+                    $this->session->sendDataPacket(new ClientToServerHandshakePacket());
                     break;
                 default:
                     $this->session->getProxy()->getLogger()->info("Not implemented S->P {$packet->getName()}");

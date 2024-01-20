@@ -34,16 +34,9 @@ abstract class NetworkSession
 
     protected int $mtuSize = self::MAX_MTU_SIZE;
 
-    // Dktapps facepalms :), like mojang ones
-    // this shi just for some stupid items
-    private PacketSerializerContext $serializerContext;
-
     public function __construct()
     {
         $this->outputOrderingIndexes = array_fill(0, 32, 0);
-        $this->serializerContext = new PacketSerializerContext(new ItemTypeDictionary([
-            new ItemTypeEntry('minecraft:shield', 358, false)
-        ]));
     }
 
     /**
@@ -213,7 +206,7 @@ abstract class NetworkSession
     // Not related to RakNet but meh... we don't like duplicates
     public function sendDataPacket(DataPacket $packet, bool $comp = true): void {
         $stream = new BinaryStream();
-        PacketBatch::encodePackets($stream, $this->serializerContext, [$packet]);
+        PacketBatch::encodePackets($stream, ProxyServer::getPacketSerializerContext(), [$packet]);
         if ($comp) {
             $buffer = zlib_encode($stream->getBuffer(), ZLIB_ENCODING_RAW, 7);
         } else {
