@@ -75,6 +75,9 @@ class ConnectedServerHandler
         // var_dump($xbl->getAuthDeviceCode());
     }
 
+    /**
+     * @throws Exception
+     */
     public function handleMinecraft(EncapsulatedPacket $encapsulated): void
     {
         $buffer = substr($encapsulated->buffer, 1);
@@ -86,12 +89,20 @@ class ConnectedServerHandler
         }
 
         if ($this->isLoggedIn) {
-            $buffer = zlib_decode($buffer);
+            $compAlgo = $buffer[0];  // skip compression id
+            $buffer = substr($buffer, 1);
+            if ($compAlgo != "\xff") {
+                if ($compAlgo === "\x00") {  // ZLIB
+                    $buffer = zlib_decode($buffer);
+                } else if ($compAlgo === "\x01") {  // SNAPPY
+                    throw new Exception("Snappy compression is not supported yet!");
+                }
+            }
         }
 
         /** @var DataPacket $packet */
         foreach (PacketBatch::decodePackets(
-            new BinaryStream($buffer), ProxyServer::getPacketSerializerContext(), PacketPool::getInstance()
+            new BinaryStream($buffer), PacketPool::getInstance()
         ) as $packet) {
 //            var_dump($packet->getName());
             switch ($packet->pid()) {
@@ -105,7 +116,7 @@ class ConnectedServerHandler
 
 //                    $cachedClientChains = $this->session->getConnectedClient()->cachedChainData;
 
-//                    $identityChain = JWT::sign(json_encode(                        [
+//                    $identityChain = JWT::sign(json_encode([
 //                        "certificateAuthority" => true,
 //                        "exp" => $cachedClientChains["exp"],
 //                        "identityPublicKey" => ConnectedClientHandler::MOJANG_PUBLIC_KEY,

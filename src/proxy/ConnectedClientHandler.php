@@ -4,6 +4,7 @@
 namespace proxy;
 
 
+use Exception;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use GlobalLogger;
@@ -76,16 +77,28 @@ class ConnectedClientHandler
         $this->session = $session;
     }
 
+    /**
+     * @throws Exception
+     */
     public function handleMinecraft(EncapsulatedPacket $encapsulated): void {
         // TODO: encryption (ez)
 
         $buffer = substr($encapsulated->buffer, 1);
         if ($this->isLoggedIn) {
-            $buffer = zlib_decode($buffer);
+            $compAlgo = $buffer[0];  // skip compression id
+            $buffer = substr($buffer, 1);
+            if ($compAlgo != "\xff") {
+                if ($compAlgo === "\x00") {  // ZLIB
+                    $buffer = zlib_decode($buffer);
+                } else if ($compAlgo === "\x01") {  // SNAPPY
+                    throw new Exception("Snappy compression is not supported yet!");
+                }
+            }
         }
 
         /** @var DataPacket $packet */
-        foreach (PacketBatch::decodePackets(new BinaryStream($buffer), ProxyServer::getPacketSerializerContext(), PacketPool::getInstance()) as $packet) {
+        foreach (PacketBatch::decodePackets(new BinaryStream($buffer), PacketPool::getInstance()) as $packet) {
+//            var_dump($packet->getName());
             if (($session = $this->getServerSession()) != null) {
                 if ($session->isConnected()) {
                     switch ($packet->pid()) {

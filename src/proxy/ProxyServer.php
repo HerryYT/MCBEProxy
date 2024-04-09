@@ -7,9 +7,6 @@ namespace proxy;
 use GlobalLogger;
 use Logger;
 use pocketmine\network\mcpe\protocol\ProtocolInfo;
-use pocketmine\network\mcpe\protocol\serializer\ItemTypeDictionary;
-use pocketmine\network\mcpe\protocol\serializer\PacketSerializerContext;
-use pocketmine\network\mcpe\protocol\types\ItemTypeEntry;
 use raklib\protocol\MessageIdentifiers;
 use raklib\protocol\Packet;
 use raklib\protocol\PacketSerializer;
@@ -144,15 +141,6 @@ class ProxyServer
 
     public function sendBuffer(string $buffer, InternetAddress $address): void {
         $this->socket->writePacket($buffer, $address->getIp(), $address->getPort());
-    }
-
-    public static function getPacketSerializerContext(): PacketSerializerContext {
-        if (self::$packetSerializerContext == null) {
-            self::$packetSerializerContext = new PacketSerializerContext(new ItemTypeDictionary([
-                new ItemTypeEntry('minecraft:shield', 358, false)
-            ]));
-        }
-        return self::$packetSerializerContext;
     }
 
     public function getServerID(): int {

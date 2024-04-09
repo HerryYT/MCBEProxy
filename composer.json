@@ -3,9 +3,9 @@
     "description": "A proxy for Minecraft Bedrock Edition",
     "require": {
         "pocketmine/raklib": "0.15.1",
-        "pocketmine/bedrock-protocol": "^26.0",
+        "pocketmine/bedrock-protocol": "^29",
         "pocketmine/log": "^0.4.0",
-        "pocketmine/bedrock-data": "^2.7",
+        "pocketmine/bedrock-data": "^2.9",
         "ext-zlib": "*",
         "firebase/php-jwt": "^6.10",
         "ext-json": "*",

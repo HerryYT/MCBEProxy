@@ -5,10 +5,7 @@ namespace proxy;
 
 
 use pocketmine\network\mcpe\protocol\DataPacket;
-use pocketmine\network\mcpe\protocol\serializer\ItemTypeDictionary;
 use pocketmine\network\mcpe\protocol\serializer\PacketBatch;
-use pocketmine\network\mcpe\protocol\serializer\PacketSerializerContext;
-use pocketmine\network\mcpe\protocol\types\ItemTypeEntry;
 use pocketmine\utils\BinaryStream;
 use raklib\protocol\ACK;
 use raklib\protocol\Datagram;
@@ -206,9 +203,9 @@ abstract class NetworkSession
     // Not related to RakNet but meh... we don't like duplicates
     public function sendDataPacket(DataPacket $packet, bool $comp = true): void {
         $stream = new BinaryStream();
-        PacketBatch::encodePackets($stream, ProxyServer::getPacketSerializerContext(), [$packet]);
+        PacketBatch::encodePackets($stream, [$packet]);
         if ($comp) {
-            $buffer = zlib_encode($stream->getBuffer(), ZLIB_ENCODING_RAW, 7);
+            $buffer = "\x00" . zlib_encode($stream->getBuffer(), ZLIB_ENCODING_RAW, 7);
         } else {
             $buffer = $stream->getBuffer();
         }

@@ -228,9 +228,10 @@ class ServerSession extends NetworkSession
     public function sendDataPacket(DataPacket $packet, bool $comp = true): void
     {
         $stream = new BinaryStream();
-        PacketBatch::encodePackets($stream, ProxyServer::getPacketSerializerContext(), [$packet]);
+        PacketBatch::encodePackets($stream, [$packet]);
         if ($comp) {
-            $buffer = zlib_encode($stream->getBuffer(), ZLIB_ENCODING_RAW, 7);
+            $buffer = "\x00"; // "zlib" compression
+            $buffer .= zlib_encode($stream->getBuffer(), ZLIB_ENCODING_RAW, 7);
         } else {
             $buffer = $stream->getBuffer();
         }
