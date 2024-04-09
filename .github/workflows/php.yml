@@ -23,8 +23,6 @@ jobs:
         php-version: 8.1
         install-path: "./bin"
         pm-version-major: 5
-        
-    - uses: php-actions/composer@v6
 
     - name: Validate composer.json and composer.lock
       run: composer validate --strict
